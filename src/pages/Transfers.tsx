@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CustodianSelector } from "@/components/ui/custodian-selector";
@@ -471,6 +471,13 @@ export const Transfers = () => {
         }
       }
 
+      console.log('Loaded ICS options for transfer:', {
+        totalSlips: data?.length,
+        totalItems: items.length,
+        custodians: [...new Set(items.map(i => i.custodianName))],
+        sampleItems: items.slice(0, 3)
+      });
+
       return items;
     },
     staleTime: 5 * 60 * 1000,
@@ -482,19 +489,32 @@ export const Transfers = () => {
       : "";
     const alreadyAdded = new Set(formData.items.map((item) => item.propertyNumber));
 
-    return icsOptions
-      .filter((item) => {
-        if (alreadyAdded.has(item.propertyNumber)) return false;
-        if (normalizedFromOfficer) {
-          return item.custodianName?.toLowerCase() === normalizedFromOfficer;
-        }
-        return true;
-      })
-      .filter((item) => {
-        if (!itemSearchTerm) return true;
+    let filtered = icsOptions.filter((item) => {
+      if (alreadyAdded.has(item.propertyNumber)) return false;
+      if (normalizedFromOfficer) {
+        // Normalize the custodian name for comparison
+        const normalizedItemCustodian = (item.custodianName || "").toLowerCase().trim();
+        return normalizedItemCustodian === normalizedFromOfficer;
+      }
+      return true;
+    });
+
+    // Apply search term filter
+    if (itemSearchTerm) {
+      filtered = filtered.filter((item) => {
         const haystack = `${item.propertyNumber} ${item.description} ${item.icsSlipNumber} ${item.custodianName || ""}`.toLowerCase();
         return haystack.includes(itemSearchTerm.toLowerCase());
       });
+    }
+
+    console.log('Filtered ICS items:', {
+      fromOfficer: formData.fromAccountableOfficer,
+      totalOptions: icsOptions.length,
+      filteredCount: filtered.length,
+      items: filtered.map(i => ({ custodian: i.custodianName, propertyNumber: i.propertyNumber }))
+    });
+
+    return filtered;
   }, [icsOptions, formData.fromAccountableOfficer, formData.items, itemSearchTerm]);
 
   const filteredTransfers = useMemo(() => {
@@ -1341,10 +1361,10 @@ export const Transfers = () => {
         <DialogContent className="max-w-4xl">
           <DialogHeader>
             <DialogTitle>Select Items from ICS</DialogTitle>
-            <p className="text-sm text-muted-foreground">
+            <DialogDescription>
               Showing items issued to {formData.fromAccountableOfficer || "the selected accountable officer"}.
               Choose the items that will be transferred.
-            </p>
+            </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3">
             <Input
