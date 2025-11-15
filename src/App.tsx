@@ -32,16 +32,8 @@ import { supabase } from "@/lib/supabase";
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: {
-      staleTime: DEFAULT_STALE_TIME_MS,
-      gcTime: DEFAULT_GC_TIME_MS,
-      retry: 1,
-      refetchOnReconnect: true,
-      refetchOnWindowFocus: true,
-    },
-    mutations: {
-      retry: 1,
-    },
+    queries: { staleTime: DEFAULT_STALE_TIME_MS, gcTime: DEFAULT_GC_TIME_MS, retry: 1, refetchOnReconnect: true, refetchOnWindowFocus: true },
+    mutations: { retry: 1 },
   },
 });
 
@@ -50,17 +42,8 @@ persistQueryClient({
   persister: localforagePersister,
   maxAge: PERSIST_MAX_AGE_MS,
   buster: 'v1',
-  hydrateOptions: {
-    defaultOptions: {
-      queries: {
-        staleTime: DEFAULT_STALE_TIME_MS,
-      },
-    },
-  },
-  dehydrateOptions: {
-    shouldDehydrateMutation: () => false,
-    onDeleteOldestQuery: removeOldestQuery,
-  },
+  hydrateOptions: { defaultOptions: { queries: { staleTime: DEFAULT_STALE_TIME_MS } } },
+  dehydrateOptions: { shouldDehydrateMutation: () => false, onDeleteOldestQuery: removeOldestQuery },
 });
 
 const App = () => {
@@ -72,9 +55,7 @@ const App = () => {
       setIsLoggedIn(!!data.session);
     };
     checkAuth();
-    const { data: authListener } = supabase.auth.onAuthStateChange(() => {
-      checkAuth();
-    });
+    const { data: authListener } = supabase.auth.onAuthStateChange(() => { checkAuth(); });
     return () => authListener?.subscription?.unsubscribe?.();
   }, []);
 
@@ -84,16 +65,10 @@ const App = () => {
     <ThemeProvider defaultTheme="system" storageKey="semi-property-theme">
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <Toaster />
-          <Sonner />
+          <Toaster /><Sonner />
           <HashRouter>
             <div className="min-h-screen bg-background">
-              {isLoggedIn && (
-                <>
-                  <Header />
-                  <NetworkStatus />
-                </>
-              )}
+              {isLoggedIn && (<><Header /><NetworkStatus /></>)}
               <div className="flex">
                 {isLoggedIn && <Sidebar />}
                 <main className={isLoggedIn ? "flex-1 p-6" : "w-full"}>
@@ -103,9 +78,7 @@ const App = () => {
                         <Route path="/" element={<Dashboard />} />
                         <Route path="/inventory" element={<Inventory />} />
                         <Route path="/property-cards" element={<PropertyCardsAnnex />} />
-                        <Route path="/property-cards-old" element={<PropertyCards />} />
                         <Route path="/custodian-slips" element={<CustodianSlipsAnnex />} />
-                        <Route path="/custodian-slips-old" element={<CustodianSlips />} />
                         <Route path="/custodians" element={<Custodians />} />
                         <Route path="/transfers" element={<Transfers />} />
                         <Route path="/physical-count" element={<PhysicalCount />} />
@@ -135,38 +108,16 @@ const App = () => {
 
 export default App;
 
-window.addEventListener('online', () => {
+window.addEventListener("online", () => {
   processOfflineQueue({
-    'propertyCards.create': async ({ card }) => {
-      await propertyCardService.create(card);
-    },
-    'propertyCards.update': async ({ id, updates }) => {
-      await propertyCardService.update(id, updates);
-    },
-    'propertyCards.delete': async ({ id }) => {
-      await propertyCardService.delete(id);
-    },
-    'propertyCards.addEntry': async ({ propertyCardId, entry }) => {
-      await propertyCardService.addEntry(propertyCardId, entry);
-    },
-    'propertyCards.updateEntry': async ({ propertyCardId, entryId, updates }) => {
-      await propertyCardService.updateEntry(propertyCardId, entryId, updates);
-    },
-    'propertyCards.deleteEntry': async ({ propertyCardId, entryId }) => {
-      await propertyCardService.deleteEntry(propertyCardId, entryId);
-    },
-    'inventory.create': async ({ item }) => {
-      await simpleInventoryService.create(item);
-    },
-    'inventory.update': async ({ id, updates }) => {
-      await simpleInventoryService.update(id, updates);
-    },
-    'inventory.delete': async ({ id }) => {
-      await simpleInventoryService.delete(id);
-    },
-  }).then(({ processed, failed }) => {
-    if (processed || failed) {
-      console.log(`[offline-queue] processed=${processed} failed=${failed}`);
-    }
-  });
+    "propertyCards.create": async (d) => { await propertyCardService.create(d.card); },
+    "propertyCards.update": async (d) => { await propertyCardService.update(d.id, d.updates); },
+    "propertyCards.delete": async (d) => { await propertyCardService.delete(d.id); },
+    "propertyCards.addEntry": async (d) => { await propertyCardService.addEntry(d.propertyCardId, d.entry); },
+    "propertyCards.updateEntry": async (d) => { await propertyCardService.updateEntry(d.propertyCardId, d.entryId, d.updates); },
+    "propertyCards.deleteEntry": async (d) => { await propertyCardService.deleteEntry(d.propertyCardId, d.entryId); },
+    "inventory.create": async (d) => { await simpleInventoryService.create(d.item); },
+    "inventory.update": async (d) => { await simpleInventoryService.update(d.id, d.updates); },
+    "inventory.delete": async (d) => { await simpleInventoryService.delete(d.id); },
+  }).then(({ processed, failed }) => { if (processed || failed) console.log(`[offline-queue] processed=${processed} failed=${failed}`); });
 });
