@@ -900,11 +900,55 @@ export const Transfers = () => {
     }
   };
 
+  const handleDeleteTransfer = async (transferId: string) => {
+    if (!window.confirm("Are you sure you want to delete this transfer? This action cannot be undone.")) {
+      return;
+    }
+
+    try {
+      // Delete transfer items first (due to foreign key)
+      const { error: itemsError } = await supabase
+        .from("transfer_items")
+        .delete()
+        .eq("transfer_id", transferId);
+
+      if (itemsError) throw itemsError;
+
+      // Delete transfer
+      const { error: transferError } = await supabase
+        .from("property_transfers")
+        .delete()
+        .eq("id", transferId);
+
+      if (transferError) throw transferError;
+
+      // Remove from local state
+      setTransfers((prev) => prev.filter((t) => t.id !== transferId));
+
+      toast({
+        title: "Transfer deleted",
+        description: "The transfer has been permanently removed.",
+      });
+    } catch (err) {
+      console.error("Error deleting transfer:", err);
+      toast({
+        title: "Error deleting transfer",
+        description: err instanceof Error ? err.message : "Failed to delete transfer",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handlePrint = (transfer: Transfer) => {
     setSelectedTransfer(transfer);
+    // Use a longer timeout to ensure DOM is updated before printing
     setTimeout(() => {
       window.print();
-    }, 100);
+      // Clear the transfer after printing
+      setTimeout(() => {
+        setSelectedTransfer(null);
+      }, 500);
+    }, 300);
   };
 
   const handleExport = () => {
@@ -1532,6 +1576,18 @@ export const Transfers = () => {
                     Print Inventory Transfer Report
                   </Button>
 
+                  {transfer.status === "Rejected" && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="destructive"
+                      className="w-full"
+                      onClick={() => handleDeleteTransfer(transfer.id)}
+                    >
+                      Delete Rejected Transfer
+                    </Button>
+                  )}
+
                   {transfer.status !== "Completed" && transfer.status !== "Rejected" && (
                     <div className="flex flex-col sm:flex-row gap-2">
                       {transfer.status === "Pending" && (
@@ -1587,8 +1643,8 @@ export const Transfers = () => {
       </div>
 
       {selectedTransfer && (
-        <div className="print-only">
-          <div ref={printRef}>{renderPrintLayout(selectedTransfer)}</div>
+        <div className="print-only" ref={printRef}>
+          {renderPrintLayout(selectedTransfer)}
         </div>
       )}
 
