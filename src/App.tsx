@@ -8,7 +8,7 @@ import { localforagePersister, DEFAULT_GC_TIME_MS, DEFAULT_STALE_TIME_MS, PERSIS
 import { processOfflineQueue } from "@/lib/offlineQueue";
 import { propertyCardService } from "@/services/propertyCardService";
 import { simpleInventoryService } from "@/services/simpleInventoryService";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { HashRouter, Routes, Route } from "react-router-dom";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
@@ -72,7 +72,7 @@ const App = () => (
       <TooltipProvider>
         <Toaster />
         <Sonner />
-        <BrowserRouter>
+        <HashRouter>
           <div className="min-h-screen bg-background">
             <Header />
             <NetworkStatus />
@@ -100,7 +100,7 @@ const App = () => (
               </main>
             </div>
           </div>
-        </BrowserRouter>
+        </HashRouter>
       </TooltipProvider>
     </QueryClientProvider>
   </ThemeProvider>
@@ -144,3 +144,4 @@ window.addEventListener('online', () => {
     }
   });
 });
+
