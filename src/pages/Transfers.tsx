@@ -429,16 +429,14 @@ export const Transfers = () => {
             property_number,
             description,
             quantity,
-            condition,
-            amount,
-            total_cost,
-            unit_cost,
+            unit,
             date_issued,
             inventory_items (
               id,
               date_acquired,
               property_number,
-              total_cost
+              total_cost,
+              condition
             )
           )
         `)
@@ -459,8 +457,8 @@ export const Transfers = () => {
             propertyNumber: item.property_number || "",
             description: item.description || "",
             quantity: item.quantity || 0,
-            condition: item.condition || "",
-            amount: Number(item.total_cost ?? item.amount ?? item.unit_cost ?? 0),
+            condition: item.inventory_items?.condition || "",
+            amount: Number(item.inventory_items?.total_cost ?? 0),
             dateAcquired: item.inventory_items?.date_acquired || "",
             custodianName: slip.custodian_name || "",
             icsSlipId: slip.id,
