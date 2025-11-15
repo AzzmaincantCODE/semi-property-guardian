@@ -676,6 +676,28 @@ export const Transfers = () => {
       const itrNumber = formData.itrNumber || generateNextItrNumber(transfers);
       const transferId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`;
 
+      // Map frontend transfer types to DB allowed values (adjust mapping as needed)
+      const transferTypeMap: Record<string, string> = {
+        Donation: "Permanent",
+        Reassignment: "Permanent",
+        Relocate: "Temporary",
+        Others: "Temporary",
+      };
+
+      const dbTransferType = transferTypeMap[formData.transferType] ?? "Permanent";
+
+      // Ensure we have an authenticated user for requested_by (DB requires requested_by)
+      const { data: authData } = await supabase.auth.getUser();
+      const currentUserId = authData?.user?.id;
+      if (!currentUserId) {
+        toast({
+          title: "Authentication required",
+          description: "You must be signed in to create transfers.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       // Save transfer to database
       const { error: transferError } = await supabase
         .from("property_transfers")
@@ -684,11 +706,11 @@ export const Transfers = () => {
           transfer_number: itrNumber,
           from_department: formData.fromAccountableOfficer,
           to_department: formData.toAccountableOfficer,
-          transfer_type: formData.transferType,
+          transfer_type: dbTransferType,
           status: formData.status,
           date_requested: formData.date,
           reason: formData.reason,
-          requested_by: (await supabase.auth.getUser()).data.user?.id || "system",
+          requested_by: currentUserId,
         });
 
       if (transferError) throw transferError;
