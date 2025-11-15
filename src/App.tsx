@@ -8,7 +8,7 @@ import { localforagePersister, DEFAULT_GC_TIME_MS, DEFAULT_STALE_TIME_MS, PERSIS
 import { processOfflineQueue } from "@/lib/offlineQueue";
 import { propertyCardService } from "@/services/propertyCardService";
 import { simpleInventoryService } from "@/services/simpleInventoryService";
-import { HashRouter, Routes, Route } from "react-router-dom";
+import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
@@ -27,12 +27,12 @@ import Debug from "@/pages/Debug";
 import Lookups from "@/pages/Lookups";
 import Login from "@/pages/Login";
 import NotFound from "./pages/NotFound";
-import { } from "react";
+import React from "react";
+import { supabase } from "@/lib/supabase";
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // keep cached data useful offline
       staleTime: DEFAULT_STALE_TIME_MS,
       gcTime: DEFAULT_GC_TIME_MS,
       retry: 1,
@@ -45,7 +45,6 @@ const queryClient = new QueryClient({
   },
 });
 
-// Persist cache to IndexedDB
 persistQueryClient({
   queryClient,
   persister: localforagePersister,
@@ -64,51 +63,78 @@ persistQueryClient({
   },
 });
 
-// Auth temporarily disabled: all routes are public for debugging
+const App = () => {
+  const [isLoggedIn, setIsLoggedIn] = React.useState<boolean | null>(null);
 
-const App = () => (
-  <ThemeProvider defaultTheme="system" storageKey="semi-property-theme">
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <HashRouter>
-          <div className="min-h-screen bg-background">
-            <Header />
-            <NetworkStatus />
-            <div className="flex">
-              <Sidebar />
-              <main className="flex-1 p-6">
-                <Routes>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route path="/inventory" element={<Inventory />} />
-                  <Route path="/property-cards" element={<PropertyCardsAnnex />} />
-                  <Route path="/property-cards-old" element={<PropertyCards />} />
-                  <Route path="/custodian-slips" element={<CustodianSlipsAnnex />} />
-                  <Route path="/custodian-slips-old" element={<CustodianSlips />} />
-                  <Route path="/custodians" element={<Custodians />} />
-                  <Route path="/transfers" element={<Transfers />} />
-                  <Route path="/physical-count" element={<PhysicalCount />} />
-                  <Route path="/loss-reports" element={<LossReports />} />
-                  <Route path="/reports" element={<Reports />} />
-                  <Route path="/login" element={<Login />} />
-                  <Route path="/debug" element={<Debug />} />
-                  <Route path="/settings/lookups" element={<Lookups />} />
-                  {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-                  <Route path="*" element={<NotFound />} />
-                </Routes>
-              </main>
+  React.useEffect(() => {
+    const checkAuth = async () => {
+      const { data } = await supabase.auth.getSession();
+      setIsLoggedIn(!!data.session);
+    };
+    checkAuth();
+    const { data: authListener } = supabase.auth.onAuthStateChange(() => {
+      checkAuth();
+    });
+    return () => authListener?.subscription?.unsubscribe?.();
+  }, []);
+
+  if (isLoggedIn === null) return null;
+
+  return (
+    <ThemeProvider defaultTheme="system" storageKey="semi-property-theme">
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <HashRouter>
+            <div className="min-h-screen bg-background">
+              {isLoggedIn && (
+                <>
+                  <Header />
+                  <NetworkStatus />
+                </>
+              )}
+              <div className="flex">
+                {isLoggedIn && <Sidebar />}
+                <main className={isLoggedIn ? "flex-1 p-6" : "w-full"}>
+                  <Routes>
+                    {isLoggedIn ? (
+                      <>
+                        <Route path="/" element={<Dashboard />} />
+                        <Route path="/inventory" element={<Inventory />} />
+                        <Route path="/property-cards" element={<PropertyCardsAnnex />} />
+                        <Route path="/property-cards-old" element={<PropertyCards />} />
+                        <Route path="/custodian-slips" element={<CustodianSlipsAnnex />} />
+                        <Route path="/custodian-slips-old" element={<CustodianSlips />} />
+                        <Route path="/custodians" element={<Custodians />} />
+                        <Route path="/transfers" element={<Transfers />} />
+                        <Route path="/physical-count" element={<PhysicalCount />} />
+                        <Route path="/loss-reports" element={<LossReports />} />
+                        <Route path="/reports" element={<Reports />} />
+                        <Route path="/debug" element={<Debug />} />
+                        <Route path="/settings/lookups" element={<Lookups />} />
+                        <Route path="*" element={<NotFound />} />
+                      </>
+                    ) : (
+                      <>
+                        <Route path="/login" element={<Login />} />
+                        <Route path="/" element={<Navigate to="/login" replace />} />
+                        <Route path="*" element={<Navigate to="/login" replace />} />
+                      </>
+                    )}
+                  </Routes>
+                </main>
+              </div>
             </div>
-          </div>
-        </HashRouter>
-      </TooltipProvider>
-    </QueryClientProvider>
-  </ThemeProvider>
-);
+          </HashRouter>
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
+  );
+};
 
 export default App;
 
-// Process offline queue when we regain connectivity
 window.addEventListener('online', () => {
   processOfflineQueue({
     'propertyCards.create': async ({ card }) => {
@@ -144,4 +170,3 @@ window.addEventListener('online', () => {
     }
   });
 });
-
