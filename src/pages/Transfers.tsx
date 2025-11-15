@@ -737,32 +737,32 @@ export const Transfers = () => {
       // 1. Update inventory items status to "transferred"
       for (const item of formData.items) {
         if (item.inventoryItemId) {
-          await supabase
+          const { error: invErr } = await supabase
             .from("inventory_items")
             .update({ status: "transferred" })
-            .eq("id", item.inventoryItemId)
-            .catch((err) => console.error("Failed to update inventory item:", err));
+            .eq("id", item.inventoryItemId);
+          if (invErr) console.error("Failed to update inventory item:", invErr);
         }
       }
 
       // 2. Update property cards status to "transferred"
       for (const item of formData.items) {
-        await supabase
+        const { error: cardErr } = await supabase
           .from("property_cards")
           .update({ status: "transferred" })
-          .eq("property_number", item.propertyNumber)
-          .catch((err) => console.error("Failed to update property card:", err));
+          .eq("property_number", item.propertyNumber);
+        if (cardErr) console.error("Failed to update property card:", cardErr);
       }
 
       // 3. Update custodian slip items status if needed
       for (const item of formData.items) {
         if (item.icsSlipId) {
-          await supabase
+          const { error: icsErr } = await supabase
             .from("custodian_slip_items")
             .update({ status: "transferred" })
             .eq("slip_id", item.icsSlipId)
-            .eq("property_number", item.propertyNumber)
-            .catch((err) => console.error("Failed to update ICS item:", err));
+            .eq("property_number", item.propertyNumber);
+          if (icsErr) console.error("Failed to update ICS item:", icsErr);
         }
       }
 
