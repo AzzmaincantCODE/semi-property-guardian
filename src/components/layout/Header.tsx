@@ -1,10 +1,15 @@
 import { Button } from "@/components/ui/button";
-import { FileText, Moon, Sun, Monitor } from "lucide-react";
+import { FileText, Moon, Sun, Monitor, LogOut } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useTheme } from "@/components/theme/ThemeProvider";
+import { supabase } from "@/lib/supabase";
 
 export const Header = () => {
   const { theme, setTheme } = useTheme();
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
 
   return (
     <header className="bg-government-dark text-white shadow-formal">
@@ -54,6 +59,17 @@ export const Header = () => {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+
+            {/* Logout Button */}
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="text-white border-white/20 hover:bg-white/10"
+              onClick={handleLogout}
+            >
+              <LogOut className="h-4 w-4 mr-2" />
+              Logout
+            </Button>
           </div>
         </div>
       </div>
