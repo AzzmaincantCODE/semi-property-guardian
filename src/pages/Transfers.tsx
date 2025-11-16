@@ -715,7 +715,7 @@ export const Transfers = () => {
 
       if (transferError) throw transferError;
 
-      // Save transfer items to database
+      // Save transfer items to database with all tracking fields
       const transferItems = formData.items.map((item) => ({
         id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`,
         transfer_id: transferId,
@@ -723,6 +723,11 @@ export const Transfers = () => {
         description: item.description,
         quantity: item.quantity,
         condition: item.condition,
+        inventory_item_id: item.inventoryItemId || null,
+        ics_slip_id: item.icsSlipId || null,
+        custodian_slip_item_id: item.icsSlipId || null,
+        from_custodian: formData.fromAccountableOfficer,
+        to_custodian: formData.toAccountableOfficer,
       }));
 
       if (transferItems.length > 0) {
@@ -734,32 +739,41 @@ export const Transfers = () => {
       }
 
       // Update related records
-      // 1. Update inventory items status to "transferred"
+      // 1. Update inventory items status to "transferred" and assign to new custodian
       for (const item of formData.items) {
         if (item.inventoryItemId) {
           const { error: invErr } = await supabase
             .from("inventory_items")
-            .update({ status: "transferred" })
+            .update({ 
+              status: "transferred",
+              custodian_name: formData.toAccountableOfficer,
+            })
             .eq("id", item.inventoryItemId);
           if (invErr) console.error("Failed to update inventory item:", invErr);
         }
       }
 
-      // 2. Update property cards status to "transferred"
+      // 2. Update property cards status to "transferred" and update custodian
       for (const item of formData.items) {
         const { error: cardErr } = await supabase
           .from("property_cards")
-          .update({ status: "transferred" })
+          .update({ 
+            status: "transferred",
+            custodian_name: formData.toAccountableOfficer,
+          })
           .eq("property_number", item.propertyNumber);
         if (cardErr) console.error("Failed to update property card:", cardErr);
       }
 
-      // 3. Update custodian slip items status if needed
+      // 3. Update custodian slip items status and reassign custodian
       for (const item of formData.items) {
         if (item.icsSlipId) {
           const { error: icsErr } = await supabase
             .from("custodian_slip_items")
-            .update({ status: "transferred" })
+            .update({ 
+              status: "transferred",
+              custodian_name: formData.toAccountableOfficer,
+            })
             .eq("slip_id", item.icsSlipId)
             .eq("property_number", item.propertyNumber);
           if (icsErr) console.error("Failed to update ICS item:", icsErr);
