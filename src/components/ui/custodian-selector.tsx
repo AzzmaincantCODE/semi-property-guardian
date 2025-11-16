@@ -149,7 +149,7 @@ export const CustodianSelector = ({
 
         {/* Dropdown */}
         {isOpen && (
-          <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-auto">
+          <div className="absolute z-50 w-full mt-1 bg-card border border-border rounded-md shadow-lg max-h-60 overflow-auto">
             {isLoading ? (
               <div className="p-3 text-center text-sm text-muted-foreground">
                 Loading custodians...
@@ -164,7 +164,7 @@ export const CustodianSelector = ({
                   <button
                     key={custodian.id}
                     type="button"
-                    className="w-full px-3 py-2 text-left hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
+                    className="w-full px-3 py-2 text-left hover:bg-secondary focus:bg-secondary focus:outline-none"
                     onClick={() => handleSelectCustodian(custodian)}
                   >
                     <div className="flex items-center justify-between">

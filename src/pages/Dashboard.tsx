@@ -294,12 +294,12 @@ export const Dashboard = () => {
           </div>
           
           {safeStats.totalItems > 0 && (
-            <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+            <div className="mt-6 p-4 bg-secondary rounded-lg">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-gray-700">Distribution</span>
-                <span className="text-sm text-gray-500">{safeStats.totalItems} total items</span>
+                <span className="text-sm font-medium text-foreground">Distribution</span>
+                <span className="text-sm text-muted-foreground">{safeStats.totalItems} total items</span>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-3">
+              <div className="w-full bg-muted rounded-full h-3">
                 <div className="flex h-3 rounded-full overflow-hidden">
                   <div 
                     className="bg-green-500" 
@@ -320,7 +320,7 @@ export const Dashboard = () => {
                   )}
                 </div>
               </div>
-              <div className="flex items-center justify-between mt-2 text-xs text-gray-600 flex-wrap gap-2">
+              <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground flex-wrap gap-2">
                 <div className="flex items-center space-x-1">
                   <div className="w-3 h-3 bg-green-500 rounded"></div>
                   <span>Issued ({safeStats.issuedItems})</span>

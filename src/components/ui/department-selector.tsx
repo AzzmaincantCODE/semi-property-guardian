@@ -159,7 +159,7 @@ export const DepartmentSelector = ({
                   <button
                     key={department.id}
                     type="button"
-                    className="w-full px-3 py-2 text-left hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
+                    className="w-full px-3 py-2 text-left hover:bg-secondary focus:bg-secondary focus:outline-none"
                     onClick={() => handleSelectDepartment(department)}
                   >
                     <div className="flex items-center justify-between">

@@ -670,14 +670,14 @@ export const CustodianSlips = () => {
                     .map(item => (
                       <div 
                         key={item.id} 
-                        className={`p-2 border-b cursor-pointer hover:bg-gray-50 flex items-center justify-between ${
-                          selectedInventoryItems.includes(item.id) ? 'bg-blue-50' : ''
+                        className={`p-2 border-b cursor-pointer hover:bg-secondary flex items-center justify-between ${
+                          selectedInventoryItems.includes(item.id) ? 'bg-secondary' : ''
                         }`}
                         onClick={() => toggleInventoryItem(item.id)}
                       >
                         <div className="flex-1">
                           <div className="font-medium">{item.propertyNumber}</div>
-                          <div className="text-sm text-gray-600">{item.description}</div>
+                          <div className="text-sm text-muted-foreground">{item.description}</div>
                           <div className="text-xs text-green-600">Available</div>
                         </div>
                         {selectedInventoryItems.includes(item.id) && (
@@ -686,7 +686,7 @@ export const CustodianSlips = () => {
                       </div>
                     ))}
                   {inventoryItems.length === 0 && (
-                    <div className="p-4 text-center text-gray-500">
+                    <div className="p-4 text-center text-muted-foreground">
                       No inventory items found.
                     </div>
                   )}
@@ -711,7 +711,7 @@ export const CustodianSlips = () => {
                         <td className="p-2">{it.quantity}</td>
                         <td className="p-2">{it.unit}</td>
                         <td className="p-2">
-                          <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded">
+                          <span className="px-2 py-1 bg-success/20 text-success text-xs rounded">
                             Assigned to {selectedSlip.custodianName}
                           </span>
                         </td>
@@ -731,12 +731,12 @@ export const CustodianSlips = () => {
                     .map(item => (
                       <div key={item.id} className="p-2 border-b text-sm">
                         <div className="font-medium">{item.propertyNumber}</div>
-                        <div className="text-gray-600">{item.description}</div>
-                        <div className="text-xs text-red-600">Status: {item.assignmentStatus}</div>
+                        <div className="text-muted-foreground">{item.description}</div>
+                        <div className="text-xs text-destructive">Status: {item.assignmentStatus}</div>
                       </div>
                     ))}
                   {inventoryItems.filter(item => item.assignmentStatus === 'Assigned').length === 0 && (
-                    <div className="p-2 text-center text-gray-500 text-sm">
+                    <div className="p-2 text-center text-muted-foreground text-sm">
                       No items assigned to other custodians
                     </div>
                   )}
