@@ -23,10 +23,7 @@ const navigation = [
   { name: "Custodian Slips", href: "/custodian-slips", icon: ClipboardList },
   { name: "Custodians", href: "/custodians", icon: Users },
   { name: "Transfers", href: "/transfers", icon: ArrowRightLeft },
-  { name: "Physical Count", href: "/physical-count", icon: BarChart3 },
   { name: "Lookups", href: "/settings/lookups", icon: Settings },
-  { name: "Loss Reports", href: "/loss-reports", icon: AlertTriangle },
-  { name: "Reports", href: "/reports", icon: FileText },
 ];
 
 export const Sidebar = () => {

@@ -66,7 +66,7 @@ const App = () => {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <Toaster /><Sonner />
-          <HashRouter>
+          <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
             <div className="min-h-screen bg-background">
               {isLoggedIn && (<><Header /><NetworkStatus /></>)}
               <div className="flex">

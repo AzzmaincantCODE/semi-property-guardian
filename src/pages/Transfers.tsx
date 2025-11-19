@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,7 +28,7 @@ import {
   History,
 } from "lucide-react";
 
-type TransferStatus = "Pending" | "In Transit" | "Completed" | "Rejected";
+type TransferStatus = "Draft" | "Issued" | "Completed" | "Rejected";
 type TransferType = "Donation" | "Reassignment" | "Relocate" | "Others";
 
 interface TransferItem {
@@ -118,7 +118,7 @@ const INITIAL_FORM_STATE: TransferFormState = {
   transferType: "Donation",
   otherTransferType: "",
   reason: "",
-  status: "Pending",
+  status: "Draft",
   items: [],
 };
 
@@ -157,11 +157,12 @@ const formatCustodianLine = (name?: string, department?: string) => {
   return name;
 };
 
-const generateNextItrNumber = (existingTransfers: Transfer[]) => {
+const generateNextItrNumber = async (existingTransfers: Transfer[] = []): Promise<string> => {
   const currentYear = new Date().getFullYear();
   const pattern = new RegExp(`^ITR-${currentYear}-(\\d{4})$`);
   let maxSequence = 0;
 
+  // Check local state first
   for (const transfer of existingTransfers) {
     const match = pattern.exec(transfer.itrNumber);
     if (match) {
@@ -170,6 +171,30 @@ const generateNextItrNumber = (existingTransfers: Transfer[]) => {
         maxSequence = Math.max(maxSequence, seq);
       }
     }
+  }
+
+  // Also check database for any transfers we might have missed
+  try {
+    const { data: dbTransfers } = await supabase
+      .from("property_transfers")
+      .select("transfer_number")
+      .like("transfer_number", `ITR-${currentYear}-%`)
+      .order("transfer_number", { ascending: false })
+      .limit(100);
+
+    if (dbTransfers) {
+      for (const transfer of dbTransfers) {
+        const match = pattern.exec(transfer.transfer_number);
+        if (match) {
+          const seq = parseInt(match[1], 10);
+          if (!Number.isNaN(seq)) {
+            maxSequence = Math.max(maxSequence, seq);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Could not check database for existing ITR numbers, using local state only:", err);
   }
 
   const nextSequence = String(maxSequence + 1).padStart(4, "0");
@@ -401,6 +426,7 @@ export const Transfers = () => {
   const printRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const [formData, setFormData] = useState<TransferFormState>(INITIAL_FORM_STATE);
 
@@ -409,11 +435,15 @@ export const Transfers = () => {
     const loadTransfers = async () => {
       try {
         setIsLoadingTransfers(true);
-        const { data, error } = await supabase
+        // First try with inventory_item_id, fallback without it if column doesn't exist
+        let data, error;
+        const queryWithInventoryId = supabase
           .from("property_transfers")
           .select(`
             id,
             transfer_number,
+            entity_name,
+            fund_cluster,
             from_department,
             to_department,
             transfer_type,
@@ -431,10 +461,50 @@ export const Transfers = () => {
               property_number,
               description,
               quantity,
-              condition
+              condition,
+              inventory_item_id
             )
           `)
           .order("date_requested", { ascending: false });
+
+        const result = await queryWithInventoryId;
+        data = result.data;
+        error = result.error;
+
+        // If error is about missing column, retry without inventory_item_id
+        if (error && (error.message?.includes('column') || error.message?.includes('inventory_item_id'))) {
+          console.warn("inventory_item_id column not found, loading without it:", error.message);
+          const fallbackResult = await supabase
+            .from("property_transfers")
+            .select(`
+              id,
+              transfer_number,
+              entity_name,
+              fund_cluster,
+              from_department,
+              to_department,
+              transfer_type,
+              status,
+              requested_by,
+              approved_by,
+              date_requested,
+              date_approved,
+              date_completed,
+              reason,
+              remarks,
+              created_at,
+              transfer_items (
+                id,
+                property_number,
+                description,
+                quantity,
+                condition
+              )
+            `)
+            .order("date_requested", { ascending: false });
+          data = fallbackResult.data;
+          error = fallbackResult.error;
+        }
 
         if (error) {
           console.error("Failed to load transfers", error);
@@ -442,32 +512,103 @@ export const Transfers = () => {
         }
 
         // Transform database records to Transfer interface
-        const loadedTransfers: Transfer[] = (data || []).map((record: any) => ({
-          id: record.id,
-          entityName: "", // Not stored in current schema, can be added if needed
-          fromAccountableOfficer: record.from_department,
-          toAccountableOfficer: record.to_department,
-          fundCluster: "", // Not in current schema
-          itrNumber: record.transfer_number,
-          date: record.date_requested,
-          transferType: record.transfer_type as TransferType || "Donation",
-          reason: record.reason,
-          status: record.status as TransferStatus,
-          dateCompleted: record.date_completed,
-          items: (record.transfer_items || []).map((item: any) => ({
-            propertyNumber: item.property_number,
-            description: item.description,
-            quantity: item.quantity,
-            condition: item.condition,
-          })),
-          history: [
-            {
-              timestamp: record.created_at,
-              status: record.status,
-              action: "Transfer created",
-              details: `Created ${record.transfer_number}`,
-            },
-          ],
+        const loadedTransfers: Transfer[] = await Promise.all((data || []).map(async (record: any) => {
+          // For each transfer item, fetch additional data from related tables
+          const enrichedItems = await Promise.all((record.transfer_items || []).map(async (item: any) => {
+            let icsSlipNumber = null;
+            let icsDate = null;
+            let amount = null;
+            let dateAcquired = null;
+
+            // If we have inventory_item_id, fetch the inventory item data
+            if (item.inventory_item_id) {
+              const { data: invData } = await supabase
+                .from("inventory_items")
+                .select("date_acquired, unit_cost, total_cost, property_number")
+                .eq("id", item.inventory_item_id)
+                .single();
+
+              if (invData) {
+                dateAcquired = invData.date_acquired;
+                amount = invData.total_cost || invData.unit_cost || null;
+              }
+
+              // Try to find the ICS slip that assigned this item
+              const { data: slipItemData } = await supabase
+                .from("custodian_slip_items")
+                .select(`
+                  custodian_slips!inner (
+                    slip_number,
+                    date_issued
+                  )
+                `)
+                .eq("inventory_item_id", item.inventory_item_id)
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .single();
+
+              if (slipItemData?.custodian_slips) {
+                const slip = Array.isArray(slipItemData.custodian_slips) 
+                  ? slipItemData.custodian_slips[0] 
+                  : slipItemData.custodian_slips;
+                if (slip) {
+                  icsSlipNumber = slip.slip_number;
+                  icsDate = slip.date_issued;
+                }
+              }
+            }
+
+            // Also check if transfer_items has from_custodian/to_custodian for ICS lookup
+            if (!icsSlipNumber && item.from_custodian) {
+              const { data: slipData } = await supabase
+                .from("custodian_slips")
+                .select("slip_number, date_issued")
+                .eq("custodian_name", item.from_custodian)
+                .order("date_issued", { ascending: false })
+                .limit(1)
+                .single();
+
+              if (slipData) {
+                icsSlipNumber = slipData.slip_number;
+                icsDate = slipData.date_issued;
+              }
+            }
+
+            return {
+              propertyNumber: item.property_number,
+              description: item.description,
+              quantity: item.quantity,
+              condition: item.condition,
+              inventoryItemId: item.inventory_item_id,
+              icsSlipNumber,
+              icsDate,
+              amount,
+              dateAcquired,
+            };
+          }));
+
+          return {
+            id: record.id,
+            entityName: record.entity_name || "PROVINCIAL GOVERNMENT OF APAYAO", // Default entity name
+            fromAccountableOfficer: record.from_department,
+            toAccountableOfficer: record.to_department,
+            fundCluster: record.fund_cluster || "", // Will be empty if not in schema
+            itrNumber: record.transfer_number,
+            date: record.date_requested,
+            transferType: record.transfer_type as TransferType || "Donation",
+            reason: record.reason,
+            status: record.status as TransferStatus,
+            dateCompleted: record.date_completed,
+            items: enrichedItems,
+            history: [
+              {
+                timestamp: record.created_at,
+                status: record.status,
+                action: "Transfer created",
+                details: `Created ${record.transfer_number}`,
+              },
+            ],
+          };
         }));
 
         setTransfers(loadedTransfers);
@@ -535,19 +676,23 @@ export const Transfers = () => {
       for (const slip of data || []) {
         const slipItems = slip.custodian_slip_items || [];
         for (const item of slipItems) {
+          const inventoryItem = Array.isArray(item.inventory_items) 
+            ? item.inventory_items[0] 
+            : item.inventory_items;
+          
           items.push({
             id: item.id,
             propertyNumber: item.property_number || "",
             description: item.description || "",
             quantity: item.quantity || 0,
-            condition: item.inventory_items?.condition || "",
-            amount: Number(item.inventory_items?.total_cost ?? 0),
-            dateAcquired: item.inventory_items?.date_acquired || "",
+            condition: inventoryItem?.condition || "",
+            amount: Number(inventoryItem?.total_cost ?? 0),
+            dateAcquired: inventoryItem?.date_acquired || "",
             custodianName: slip.custodian_name || "",
             icsSlipId: slip.id,
             icsSlipNumber: slip.slip_number || "",
             icsDate: item.date_issued || slip.date_issued || "",
-            inventoryItemId: item.inventory_item_id || item.inventory_items?.id || "",
+            inventoryItemId: item.inventory_item_id || inventoryItem?.id || "",
           });
         }
       }
@@ -625,12 +770,15 @@ export const Transfers = () => {
 
   useEffect(() => {
     if (isCreating) {
-      setFormData((prev) => ({
-        ...INITIAL_FORM_STATE,
-        ...prev,
-        itrNumber: prev.itrNumber || generateNextItrNumber(transfers),
-        status: "Pending",
-      }));
+      // Generate ITR number asynchronously
+      generateNextItrNumber(transfers).then((nextNumber) => {
+        setFormData((prev) => ({
+          ...INITIAL_FORM_STATE,
+          ...prev,
+        itrNumber: prev.itrNumber || nextNumber,
+        status: "Draft",
+        }));
+      });
       setErrors({});
     } else {
       setFormData(INITIAL_FORM_STATE);
@@ -654,8 +802,8 @@ export const Transfers = () => {
     return validationErrors;
   };
 
-  const handleGenerateItrNumber = () => {
-    const nextNumber = generateNextItrNumber(transfers);
+  const handleGenerateItrNumber = async () => {
+    const nextNumber = await generateNextItrNumber(transfers);
     setFormData((prev) => ({ ...prev, itrNumber: nextNumber }));
   };
 
@@ -672,8 +820,29 @@ export const Transfers = () => {
     }
 
     try {
-      const now = new Date().toISOString();
-      const itrNumber = formData.itrNumber || generateNextItrNumber(transfers);
+    const now = new Date().toISOString();
+    // Generate ITR number if not provided, ensuring it's unique
+    let itrNumber = formData.itrNumber;
+    if (!itrNumber) {
+      itrNumber = await generateNextItrNumber(transfers);
+    }
+    
+    // Double-check uniqueness before inserting
+    const { data: existing, error: existingError } = await supabase
+      .from("property_transfers")
+      .select("id")
+      .eq("transfer_number", itrNumber)
+      .maybeSingle();
+    
+    if (existingError) {
+      console.error("Error checking existing transfer number:", existingError);
+      throw existingError;
+    }
+    
+    if (existing) {
+      // If duplicate exists, generate a new one
+      itrNumber = await generateNextItrNumber(transfers);
+    }
       const transferId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`;
 
       // Map frontend transfer types to DB allowed values (adjust mapping as needed)
@@ -699,19 +868,43 @@ export const Transfers = () => {
       }
 
       // Save transfer to database
-      const { error: transferError } = await supabase
-        .from("property_transfers")
-        .insert({
-          id: transferId,
-          transfer_number: itrNumber,
-          from_department: formData.fromAccountableOfficer,
-          to_department: formData.toAccountableOfficer,
-          transfer_type: dbTransferType,
-          status: formData.status,
-          date_requested: formData.date,
-          reason: formData.reason,
-          requested_by: currentUserId,
-        });
+      let transferError;
+      let retryCount = 0;
+      const maxRetries = 3;
+      
+      while (retryCount < maxRetries) {
+        transferError = null;
+        const { error } = await supabase
+          .from("property_transfers")
+          .insert({
+            id: transferId,
+            transfer_number: itrNumber,
+            entity_name: formData.entityName.trim(),
+            fund_cluster: formData.fundCluster.trim(),
+            from_department: formData.fromAccountableOfficer,
+            to_department: formData.toAccountableOfficer,
+            transfer_type: dbTransferType,
+            status: formData.status,
+            date_requested: formData.date,
+            reason: formData.reason,
+            requested_by: currentUserId,
+          });
+
+        if (error) {
+          // If it's a duplicate key error, generate a new number and retry
+          if (error.code === '23505' && error.message?.includes('transfer_number')) {
+            console.warn(`Duplicate ITR number ${itrNumber} detected, generating new number...`);
+            itrNumber = await generateNextItrNumber(transfers);
+            retryCount++;
+            continue;
+          }
+          transferError = error;
+          break;
+        } else {
+          // Success, break out of retry loop
+          break;
+        }
+      }
 
       if (transferError) throw transferError;
 
@@ -738,50 +931,13 @@ export const Transfers = () => {
         if (itemsError) throw itemsError;
       }
 
-      // Update related records
-      // 1. Update inventory items status to "transferred" and assign to new custodian
-      for (const item of formData.items) {
-        if (item.inventoryItemId) {
-          const { error: invErr } = await supabase
-            .from("inventory_items")
-            .update({ 
-              status: "transferred",
-              custodian_name: formData.toAccountableOfficer,
-            })
-            .eq("id", item.inventoryItemId);
-          if (invErr) console.error("Failed to update inventory item:", invErr);
-        }
-      }
-
-      // 2. Update property cards status to "transferred" and update custodian
-      for (const item of formData.items) {
-        const { error: cardErr } = await supabase
-          .from("property_cards")
-          .update({ 
-            status: "transferred",
-            custodian_name: formData.toAccountableOfficer,
-          })
-          .eq("property_number", item.propertyNumber);
-        if (cardErr) console.error("Failed to update property card:", cardErr);
-      }
-
-      // 3. Update custodian slip items status and reassign custodian
-      for (const item of formData.items) {
-        if (item.icsSlipId) {
-          const { error: icsErr } = await supabase
-            .from("custodian_slip_items")
-            .update({ 
-              status: "transferred",
-              custodian_name: formData.toAccountableOfficer,
-            })
-            .eq("slip_id", item.icsSlipId)
-            .eq("property_number", item.propertyNumber);
-          if (icsErr) console.error("Failed to update ICS item:", icsErr);
-        }
-      }
+      // NOTE: Do NOT update custodian assignments when creating a transfer
+      // Assignments will only be updated when the transfer status is changed to "Completed"
+      // This ensures items remain with the original custodian until the transfer is finalized
 
       // Reload transfers to show the new one
-      const { data: reloadedData } = await supabase
+      let reloadedData, reloadError;
+      const reloadQuery = await supabase
         .from("property_transfers")
         .select(`
           id,
@@ -803,41 +959,81 @@ export const Transfers = () => {
             property_number,
             description,
             quantity,
-            condition
+            condition,
+            inventory_item_id
           )
         `)
         .order("date_requested", { ascending: false });
 
-      if (reloadedData) {
-        const loadedTransfers: Transfer[] = (reloadedData || []).map((record: any) => ({
-          id: record.id,
-          entityName: "",
-          fromAccountableOfficer: record.from_department,
-          toAccountableOfficer: record.to_department,
-          fundCluster: "",
-          itrNumber: record.transfer_number,
-          date: record.date_requested,
-          transferType: record.transfer_type as TransferType || "Donation",
-          reason: record.reason,
-          status: record.status as TransferStatus,
-          dateCompleted: record.date_completed,
-          items: (record.transfer_items || []).map((item: any) => ({
-            propertyNumber: item.property_number,
-            description: item.description,
-            quantity: item.quantity,
-            condition: item.condition,
-          })),
-          history: [
-            {
-              timestamp: record.created_at,
-              status: record.status,
-              action: "Transfer created",
-              details: `Created ${record.transfer_number}`,
-            },
-          ],
-        }));
-        setTransfers(loadedTransfers);
+      reloadedData = reloadQuery.data;
+      reloadError = reloadQuery.error;
+
+      // If error is about missing column, retry without inventory_item_id
+      if (reloadError && (reloadError.message?.includes('column') || reloadError.message?.includes('inventory_item_id'))) {
+        console.warn("inventory_item_id column not found in reload, loading without it");
+        const fallbackReload = await supabase
+          .from("property_transfers")
+          .select(`
+            id,
+            transfer_number,
+            from_department,
+            to_department,
+            transfer_type,
+            status,
+            requested_by,
+            approved_by,
+            date_requested,
+            date_approved,
+            date_completed,
+            reason,
+            remarks,
+            created_at,
+            transfer_items (
+              id,
+              property_number,
+              description,
+              quantity,
+              condition
+            )
+          `)
+          .order("date_requested", { ascending: false });
+        reloadedData = fallbackReload.data;
+        reloadError = fallbackReload.error;
       }
+
+      if (reloadError) {
+        console.error("Failed to reload transfers after creation:", reloadError);
+        // Continue anyway - the transfer was created successfully
+      }
+
+      // Add the new transfer to the list using formData (which has all enriched data)
+      const newTransfer: Transfer = {
+        id: transferId,
+        entityName: formData.entityName.trim(),
+        fromAccountableOfficer: formData.fromAccountableOfficer.trim(),
+        fromAccountableOfficerDepartment: formData.fromAccountableOfficerDepartment,
+        fromAccountableOfficerId: formData.fromAccountableOfficerId,
+        toAccountableOfficer: formData.toAccountableOfficer.trim(),
+        toAccountableOfficerDepartment: formData.toAccountableOfficerDepartment,
+        toAccountableOfficerId: formData.toAccountableOfficerId,
+        fundCluster: formData.fundCluster.trim(),
+        itrNumber,
+        date: formData.date,
+        transferType: formData.transferType,
+        otherTransferType: formData.otherTransferType,
+        reason: formData.reason.trim(),
+        status: formData.status,
+        items: formData.items,
+        history: [
+          {
+            timestamp: new Date().toISOString(),
+            status: formData.status,
+            action: "Transfer created",
+            details: `Created ITR ${itrNumber}`,
+          },
+        ],
+      };
+      setTransfers((prev) => [newTransfer, ...prev]);
 
       setFormData(INITIAL_FORM_STATE);
       setIsCreating(false);
@@ -861,6 +1057,12 @@ export const Transfers = () => {
     try {
       const dateCompleted = newStatus === "Completed" ? new Date().toISOString().split("T")[0] : null;
 
+      // Get the transfer with its items before updating
+      const transfer = transfers.find((t) => t.id === transferId);
+      if (!transfer) {
+        throw new Error("Transfer not found");
+      }
+
       // Update in database
       const { error } = await supabase
         .from("property_transfers")
@@ -872,25 +1074,131 @@ export const Transfers = () => {
 
       if (error) throw error;
 
+      // If transfer is being completed, update custodian assignments
+      if (newStatus === "Completed" && transfer.items && transfer.items.length > 0) {
+        // Get the "to" custodian's position/designation
+        let toCustodianPosition = "";
+        if (transfer.toAccountableOfficer) {
+          // Try to find custodian by ID first, then by name
+          const { data: custodianData } = transfer.toAccountableOfficerId
+            ? await supabase
+                .from("custodians")
+                .select("position")
+                .eq("id", transfer.toAccountableOfficerId)
+                .single()
+            : await supabase
+                .from("custodians")
+                .select("position")
+                .eq("name", transfer.toAccountableOfficer)
+                .single();
+          toCustodianPosition = custodianData?.position || "";
+        }
+
+        // Update inventory items: assign to new custodian
+        for (const item of transfer.items) {
+          // Try to find inventory_item_id if not already in the item
+          let inventoryItemId = item.inventoryItemId;
+          
+          if (!inventoryItemId && item.propertyNumber) {
+            // Look up by property number
+            const { data: invLookup } = await supabase
+              .from("inventory_items")
+              .select("id")
+              .eq("property_number", item.propertyNumber)
+              .single();
+            
+            if (invLookup) {
+              inventoryItemId = invLookup.id;
+            }
+          }
+
+          if (inventoryItemId) {
+            const { error: invErr } = await supabase
+              .from("inventory_items")
+              .update({
+                custodian: transfer.toAccountableOfficer,
+                custodian_position: toCustodianPosition,
+                assignment_status: "Assigned",
+                assigned_date: dateCompleted || new Date().toISOString().split("T")[0],
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", inventoryItemId);
+
+            if (invErr) {
+              console.error(`Failed to update inventory item ${item.propertyNumber}:`, invErr);
+            } else {
+              console.log(`✅ Successfully updated inventory item ${item.propertyNumber} to custodian ${transfer.toAccountableOfficer}`);
+            }
+          } else {
+            console.warn(`⚠️ Could not find inventory item for property number ${item.propertyNumber}`);
+          }
+
+          // Create property card entry for the transfer (regardless of inventory item update success)
+          // First, find the property card for this item
+          const { data: propertyCard } = await supabase
+            .from("property_cards")
+            .select("id")
+            .eq("property_number", item.propertyNumber)
+            .single();
+
+          if (propertyCard) {
+            // Create a property card entry for the transfer
+            const { error: entryErr } = await supabase
+              .from("property_card_entries")
+              .insert({
+                property_card_id: propertyCard.id,
+                date: dateCompleted || new Date().toISOString().split("T")[0],
+                reference: transfer.itrNumber,
+                receipt_qty: 0,
+                unit_cost: 0,
+                total_cost: 0,
+                issue_item_no: transfer.itrNumber,
+                issue_qty: item.quantity || 1,
+                office_officer: `${transfer.toAccountableOfficer}${toCustodianPosition ? ` (${toCustodianPosition})` : ""}`,
+                balance_qty: item.quantity || 1,
+                amount: item.amount || 0,
+                remarks: `Transferred from ${transfer.fromAccountableOfficer} to ${transfer.toAccountableOfficer} via ITR ${transfer.itrNumber}`,
+              });
+
+            if (entryErr) {
+              console.error(`Failed to create property card entry for ${item.propertyNumber}:`, entryErr);
+            } else {
+              console.log(`✅ Created property card entry for ${item.propertyNumber}`);
+            }
+          }
+        }
+
+        // Invalidate React Query caches to refresh the UI
+        queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+        queryClient.invalidateQueries({ queryKey: ['custodian-summaries'] });
+        queryClient.invalidateQueries({ queryKey: ['custodian-summary'] });
+        queryClient.invalidateQueries({ queryKey: ['custodian-current-items'] });
+        queryClient.invalidateQueries({ queryKey: ['custodian-item-history'] });
+        
+        // Force refetch to ensure UI updates immediately
+        queryClient.refetchQueries({ queryKey: ['inventory-items'] });
+        queryClient.refetchQueries({ queryKey: ['custodian-summaries'] });
+      }
+
       // Update local state
       setTransfers((prev) =>
-        prev.map((transfer) => {
-          if (transfer.id !== transferId) return transfer;
+        prev.map((t) => {
+          if (t.id !== transferId) return t;
           const timestamp = new Date().toISOString();
 
           return {
-            ...transfer,
+            ...t,
             status: newStatus,
-            dateCompleted: newStatus === "Completed" ? dateCompleted : transfer.dateCompleted,
+            dateCompleted: newStatus === "Completed" ? dateCompleted : t.dateCompleted,
             history: [
-              ...transfer.history,
+              ...t.history,
               {
                 timestamp,
                 status: newStatus,
                 action: `Status changed to ${newStatus}`,
                 details:
                   newStatus === "Completed"
-                    ? "Transfer marked as completed."
+                    ? "Transfer marked as completed. Items have been reassigned to the new custodian."
                     : newStatus === "Rejected"
                     ? "Transfer was rejected."
                     : undefined,
@@ -902,7 +1210,10 @@ export const Transfers = () => {
 
       toast({
         title: "Status updated",
-        description: `Transfer marked as ${newStatus}.`,
+        description:
+          newStatus === "Completed"
+            ? `Transfer marked as completed. ${transfer.items?.length || 0} item(s) have been reassigned to ${transfer.toAccountableOfficer}.`
+            : `Transfer marked as ${newStatus}.`,
       });
     } catch (err) {
       console.error("Error updating transfer status:", err);
@@ -914,7 +1225,57 @@ export const Transfers = () => {
     }
   };
 
+  // Confirm/Issue transfer mutation (similar to ICS confirmation)
+  const confirmTransferMutation = useMutation({
+    mutationFn: async (transferId: string) => {
+      // Update transfer status to Issued
+      const { error: updateError } = await supabase
+        .from("property_transfers")
+        .update({ 
+          status: 'Issued',
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", transferId);
+
+      if (updateError) {
+        throw new Error(`Failed to confirm transfer: ${updateError.message}`);
+      }
+    },
+    onSuccess: () => {
+      toast({ 
+        title: "Success", 
+        description: "Transfer has been officially confirmed and cannot be deleted" 
+      });
+      queryClient.invalidateQueries({ queryKey: ['transfers'] });
+      queryClient.refetchQueries({ queryKey: ['transfers'] });
+    },
+    onError: (error: Error) => {
+      toast({ 
+        title: "Error", 
+        description: error.message, 
+        variant: "destructive" 
+      });
+    },
+  });
+
+  const handleConfirmTransfer = (transferId: string) => {
+    if (confirm("Are you sure you want to officially confirm this transfer? Once confirmed, it cannot be deleted and will be marked as an official document.")) {
+      confirmTransferMutation.mutate(transferId);
+    }
+  };
+
   const handleDeleteTransfer = async (transferId: string) => {
+    // Get transfer to check status
+    const transfer = transfers.find((t) => t.id === transferId);
+    if (transfer?.status === "Issued") {
+      toast({
+        title: "Cannot delete",
+        description: "Issued transfers cannot be deleted. Only Draft transfers can be deleted.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (!window.confirm("Are you sure you want to delete this transfer? This action cannot be undone.")) {
       return;
     }
@@ -1127,8 +1488,8 @@ export const Transfers = () => {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="All">All status</SelectItem>
-            <SelectItem value="Pending">Pending</SelectItem>
-            <SelectItem value="In Transit">In Transit</SelectItem>
+            <SelectItem value="Draft">Draft</SelectItem>
+            <SelectItem value="Issued">Issued</SelectItem>
             <SelectItem value="Completed">Completed</SelectItem>
             <SelectItem value="Rejected">Rejected</SelectItem>
           </SelectContent>
@@ -1486,8 +1847,8 @@ export const Transfers = () => {
                     <CardTitle className="text-lg">{transfer.itrNumber}</CardTitle>
                     <p className="text-sm text-muted-foreground">{formatDate(transfer.date)}</p>
                   </div>
-                  <Badge variant={transfer.status === "Pending" ? "warning" : transfer.status === "Completed" ? "success" : transfer.status === "Rejected" ? "destructive" : "secondary"} className="flex items-center gap-1">
-                    {transfer.status === "Pending" ? <Clock className="h-3.5 w-3.5" /> : transfer.status === "Completed" ? <CheckCircle className="h-3.5 w-3.5" /> : transfer.status === "Rejected" ? <AlertCircle className="h-3.5 w-3.5" /> : <Clock className="h-3.5 w-3.5" />}
+                  <Badge variant={transfer.status === "Draft" ? "secondary" : transfer.status === "Issued" ? "default" : transfer.status === "Completed" ? "default" : transfer.status === "Rejected" ? "destructive" : "secondary"} className="flex items-center gap-1">
+                    {transfer.status === "Draft" ? <Clock className="h-3.5 w-3.5" /> : transfer.status === "Issued" ? <CheckCircle className="h-3.5 w-3.5" /> : transfer.status === "Completed" ? <CheckCircle className="h-3.5 w-3.5" /> : transfer.status === "Rejected" ? <AlertCircle className="h-3.5 w-3.5" /> : <Clock className="h-3.5 w-3.5" />}
                     {transfer.status}
                   </Badge>
                 </div>
@@ -1602,40 +1963,65 @@ export const Transfers = () => {
                     </Button>
                   )}
 
-                  {transfer.status !== "Completed" && transfer.status !== "Rejected" && (
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      {transfer.status === "Pending" && (
+                  {/* Show Confirm button for Draft transfers (like ICS) */}
+                  {(transfer.status === "Draft" || !transfer.status) && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="default"
+                      className="flex-1 bg-green-600 hover:bg-green-700"
+                      onClick={() => handleConfirmTransfer(transfer.id)}
+                      disabled={confirmTransferMutation.isPending}
+                      title="Confirm this transfer as official (cannot be deleted after confirmation)"
+                    >
+                      {confirmTransferMutation.isPending ? (
                         <>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            className="flex-1"
-                            onClick={() => handleStatusUpdate(transfer.id, "In Transit")}
-                          >
-                            Mark In Transit
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="destructive"
-                            className="flex-1"
-                            onClick={() => handleStatusUpdate(transfer.id, "Rejected")}
-                          >
-                            Reject
-                          </Button>
+                          <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+                          Confirming...
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle className="h-3.5 w-3.5 mr-2" />
+                          Confirm
                         </>
                       )}
-                      {transfer.status === "In Transit" && (
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="flex-1"
-                          onClick={() => handleStatusUpdate(transfer.id, "Completed")}
-                        >
-                          Mark Complete
-                        </Button>
-                      )}
+                    </Button>
+                  )}
+
+                  {/* Show Delete button for Draft transfers only */}
+                  {(transfer.status === "Draft" || !transfer.status) && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 text-red-600 hover:text-red-700"
+                      onClick={() => handleDeleteTransfer(transfer.id)}
+                      title="Delete this draft transfer"
+                    >
+                      Delete
+                    </Button>
+                  )}
+
+                  {/* Show action buttons for Issued transfers */}
+                  {transfer.status === "Issued" && (
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => handleStatusUpdate(transfer.id, "Completed")}
+                      >
+                        Mark Complete
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="destructive"
+                        className="flex-1"
+                        onClick={() => handleStatusUpdate(transfer.id, "Rejected")}
+                      >
+                        Reject
+                      </Button>
                     </div>
                   )}
                 </div>
@@ -1657,7 +2043,7 @@ export const Transfers = () => {
       </div>
 
       {selectedTransfer && (
-        <div className="print-only" ref={printRef}>
+        <div className="print-only" ref={printRef} style={{ display: 'none' }}>
           {renderPrintLayout(selectedTransfer)}
         </div>
       )}
