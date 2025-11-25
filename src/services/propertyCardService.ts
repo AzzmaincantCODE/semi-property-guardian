@@ -51,7 +51,7 @@ export interface PaginatedResponse<T> {
 }
 
 export const propertyCardService = {
-  mapRow(row: any): PropertyCard {
+  mapRow(row: DbPropertyCardRow): PropertyCard {
     return {
       id: row.id,
       entityName: row.entity_name,
@@ -65,7 +65,7 @@ export const propertyCardService = {
       updatedAt: row.updated_at,
     };
   },
-  mapEntry(row: any): SPCEntry {
+  mapEntry(row: DbEntryRow): SPCEntry {
     return {
       id: row.id,
       propertyCardId: row.property_card_id,
@@ -116,7 +116,7 @@ export const propertyCardService = {
     const totalPages = Math.ceil(total / limit);
 
     return {
-      data: (response.data || []).map((r: any) => propertyCardService.mapRow(r)),
+      data: (response.data || []).map((r) => propertyCardService.mapRow(r as DbPropertyCardRow)),
       pagination: { page, limit, total, totalPages },
       success: true,
     };
@@ -150,13 +150,13 @@ export const propertyCardService = {
 
     const mapped = response.data
       ? {
-          ...propertyCardService.mapRow(response.data),
-          entries: (response.data.entries || []).map((e: any) => propertyCardService.mapEntry(e)),
+          ...propertyCardService.mapRow(response.data as DbPropertyCardRow),
+          entries: (response.data.entries || []).map((e) => propertyCardService.mapEntry(e as DbEntryRow)),
         }
       : null;
 
     return {
-      data: mapped as any,
+      data: mapped,
       error: response.error?.message || null,
       success: !response.error,
     };
@@ -169,10 +169,16 @@ export const propertyCardService = {
       // Optimistic response with temporary ID
       const temp: PropertyCard = {
         id: `temp-${Date.now()}`,
-        ...card,
+        entityName: card.entityName,
+        fundCluster: card.fundCluster,
+        semiExpendableProperty: card.semiExpendableProperty,
+        propertyNumber: card.propertyNumber,
+        description: card.description,
+        dateAcquired: card.dateAcquired,
+        remarks: card.remarks,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-      } as any;
+      };
       return { data: temp, error: null, success: true };
     }
     const response = await supabase
@@ -201,9 +207,21 @@ export const propertyCardService = {
     if (!navigator.onLine) {
       await enqueueOfflineMutation('propertyCards.update', { id, updates });
       // Optimistic success; caller should update cache/UI
-      return { data: { ...(updates as any), id } as any, error: null, success: true };
+      const optimistic: PropertyCard = {
+        id,
+        entityName: updates.entityName ?? '',
+        fundCluster: updates.fundCluster ?? '',
+        semiExpendableProperty: updates.semiExpendableProperty ?? '',
+        propertyNumber: updates.propertyNumber ?? '',
+        description: updates.description ?? '',
+        dateAcquired: updates.dateAcquired ?? new Date().toISOString(),
+        remarks: updates.remarks,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      return { data: optimistic, error: null, success: true };
     }
-    const updateData: any = {};
+    const updateData: Record<string, unknown> = {};
     
     if (updates.entityName) updateData.entity_name = updates.entityName;
     if (updates.fundCluster) updateData.fund_cluster = updates.fundCluster;
@@ -252,10 +270,19 @@ export const propertyCardService = {
       const temp: SPCEntry = {
         id: `temp-entry-${Date.now()}`,
         propertyCardId,
-        ...entry,
+        date: entry.date,
+        reference: entry.reference,
+        receiptQty: entry.receiptQty,
+        unitCost: entry.unitCost,
+        totalCost: entry.totalCost,
+        issueItemNo: entry.issueItemNo,
+        issueQty: entry.issueQty,
+        officeOfficer: entry.officeOfficer,
+        balanceQty: entry.balanceQty,
+        amount: entry.amount,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-      } as any;
+      };
       return { data: temp, error: null, success: true };
     }
     const response = await supabase
@@ -287,9 +314,25 @@ export const propertyCardService = {
   async updateEntry(propertyCardId: string, entryId: string, updates: Partial<SPCEntry>): Promise<SupabaseResponse<SPCEntry>> {
     if (!navigator.onLine) {
       await enqueueOfflineMutation('propertyCards.updateEntry', { propertyCardId, entryId, updates });
-      return { data: { ...(updates as any), id: entryId, propertyCardId } as any, error: null, success: true };
+      const optimistic: SPCEntry = {
+        id: entryId,
+        propertyCardId,
+        date: updates.date ?? '',
+        reference: updates.reference ?? '',
+        receiptQty: updates.receiptQty ?? 0,
+        unitCost: updates.unitCost ?? 0,
+        totalCost: updates.totalCost ?? 0,
+        issueItemNo: updates.issueItemNo ?? '',
+        issueQty: updates.issueQty ?? 0,
+        officeOfficer: updates.officeOfficer ?? '',
+        balanceQty: updates.balanceQty ?? 0,
+        amount: updates.amount ?? 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      return { data: optimistic, error: null, success: true };
     }
-    const updateData: any = {};
+    const updateData: Record<string, unknown> = {};
     
     if (updates.date) updateData.date = updates.date;
     if (updates.reference) updateData.reference = updates.reference;
@@ -345,7 +388,7 @@ export const propertyCardService = {
       .order('date', { ascending: true });
 
     return {
-      data: (response.data || []).map((r: any) => propertyCardService.mapEntry(r)),
+      data: (response.data || []).map((r) => propertyCardService.mapEntry(r as DbEntryRow)),
       error: response.error?.message || null,
       success: !response.error,
     };

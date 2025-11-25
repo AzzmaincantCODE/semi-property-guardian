@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,17 +17,7 @@ import { CustodianSelector } from "@/components/ui/custodian-selector";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
 import type { Custodian } from "@/services/custodianService";
-import {
-  Printer,
-  Search,
-  Plus,
-  CheckCircle,
-  Clock,
-  AlertCircle,
-  Loader2,
-  Download,
-  History,
-} from "lucide-react";
+import { Printer, Search, Plus, CheckCircle, Clock, AlertCircle, Loader2, Download, History } from "lucide-react";
 
 type TransferStatus = "Draft" | "Issued" | "Completed" | "Rejected";
 type TransferType = "Donation" | "Reassignment" | "Relocate" | "Others";
@@ -43,6 +34,7 @@ interface TransferItem {
   icsDate?: string;
   inventoryItemId?: string;
   custodianName?: string;
+  subCategory?: string;
 }
 
 interface TransferHistoryEntry {
@@ -71,6 +63,9 @@ interface Transfer {
   dateCompleted?: string;
   items: TransferItem[];
   history: TransferHistoryEntry[];
+  approvedBy?: string;
+  issuedBy?: string;
+  receivedBy?: string;
 }
 
 interface TransferFormState {
@@ -106,7 +101,63 @@ interface CustodianItemOption {
   inventoryItemId?: string;
 }
 
+
+
+interface DbTransferItemRow {
+  id: string;
+  property_number: string;
+  description: string;
+  quantity: number;
+  condition: string;
+  inventory_item_id?: string;
+  from_custodian?: string;
+  to_custodian?: string;
+}
+
+interface DbTransferRecordRow {
+  id: string;
+  transfer_number: string;
+  from_department: string;
+  to_department: string;
+  transfer_type: string;
+  status: string;
+  requested_by: string;
+  approved_by?: string;
+  date_requested: string;
+  date_approved?: string;
+  date_completed?: string;
+  reason: string;
+  remarks?: string;
+  created_at: string;
+  entity_name?: string;
+  fund_cluster?: string;
+  transfer_items?: DbTransferItemRow[];
+}
+
+interface DbInventoryItemRow {
+  id: string;
+  property_number: string;
+  description: string;
+  quantity: number;
+  condition: string;
+  total_cost?: number;
+  date_acquired?: string;
+}
+
+interface TransferInsertPayload {
+  id: string;
+  transfer_number: string;
+  from_department: string;
+  to_department: string;
+  transfer_type: string;
+  status: string;
+  date_requested: string;
+  reason: string;
+  requested_by: string;
+}
 const TRANSFER_TYPES: TransferType[] = ["Donation", "Reassignment", "Relocate", "Others"];
+const UI_TO_DB_STATUS: Record<TransferStatus, string> = { Draft: "Pending", Issued: "In Transit", Completed: "Completed", Rejected: "Rejected" };
+const DB_TO_UI_STATUS: Record<string, TransferStatus> = { Pending: "Draft", "In Transit": "Issued", Completed: "Completed", Rejected: "Rejected" };
 
 const INITIAL_FORM_STATE: TransferFormState = {
   entityName: "",
@@ -121,6 +172,8 @@ const INITIAL_FORM_STATE: TransferFormState = {
   status: "Draft",
   items: [],
 };
+
+
 
 const formatDate = (value?: string) => {
   if (!value) return "";
@@ -157,49 +210,55 @@ const formatCustodianLine = (name?: string, department?: string) => {
   return name;
 };
 
-const generateNextItrNumber = async (existingTransfers: Transfer[] = []): Promise<string> => {
-  const currentYear = new Date().getFullYear();
-  const pattern = new RegExp(`^ITR-${currentYear}-(\\d{4})$`);
+const generateNextItrNumber = async (
+  existingTransfers: Transfer[] = [],
+  items: TransferItem[] = []
+): Promise<string> => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+
+  const isHighValue = items.some((it) => {
+    const amt = Number(it.amount || 0);
+    return amt > 5000 || it.subCategory === 'High Value Expendable';
+  });
+  const category = isHighValue ? 'SPHV' : 'SPLV';
+
+  const pattern = new RegExp(`^ITR ${year}-${month}-${category}-(\\d{4})$`);
   let maxSequence = 0;
 
-  // Check local state first
   for (const transfer of existingTransfers) {
     const match = pattern.exec(transfer.itrNumber);
     if (match) {
       const seq = parseInt(match[1], 10);
-      if (!Number.isNaN(seq)) {
-        maxSequence = Math.max(maxSequence, seq);
-      }
+      if (!Number.isNaN(seq)) maxSequence = Math.max(maxSequence, seq);
     }
   }
 
-  // Also check database for any transfers we might have missed
   try {
     const { data: dbTransfers } = await supabase
       .from("property_transfers")
       .select("transfer_number")
-      .like("transfer_number", `ITR-${currentYear}-%`)
+      .like("transfer_number", `ITR ${year}-${month}-${category}-%`)
       .order("transfer_number", { ascending: false })
       .limit(100);
-
     if (dbTransfers) {
       for (const transfer of dbTransfers) {
         const match = pattern.exec(transfer.transfer_number);
         if (match) {
           const seq = parseInt(match[1], 10);
-          if (!Number.isNaN(seq)) {
-            maxSequence = Math.max(maxSequence, seq);
-          }
+          if (!Number.isNaN(seq)) maxSequence = Math.max(maxSequence, seq);
         }
       }
     }
   } catch (err) {
-    console.warn("Could not check database for existing ITR numbers, using local state only:", err);
+    console.warn("Could not check database for existing ITR numbers:", err);
   }
 
   const nextSequence = String(maxSequence + 1).padStart(4, "0");
-  return `ITR-${currentYear}-${nextSequence}`;
+  return `ITR ${year}-${month}-${category}-${nextSequence}`;
 };
+
 
 const downloadCsv = (filename: string, rows: string[][]) => {
   const csvContent = rows
@@ -240,7 +299,7 @@ const mapOptionToTransferItem = (option: CustodianItemOption): TransferItem => (
 
 const renderPrintLayout = (transfer: Transfer, preview = false) => {
   const items = transfer.items || [];
-  const blankRows = Math.max(12 - items.length, 0);
+  const blankRows = Math.max(7 - items.length, 0);
   const containerClass = preview
     ? "bg-white border border-border rounded-lg shadow-sm text-foreground"
     : "bg-white text-black border border-black";
@@ -354,53 +413,75 @@ const renderPrintLayout = (transfer: Transfer, preview = false) => {
         </thead>
         <tbody>
           {items.map((item, index) => (
-            <tr key={item.propertyNumber ?? index} className="h-10 align-top">
-              <td className="border border-black p-2">{item.dateAcquired || "\u00A0"}</td>
-              <td className="border border-black p-2">{item.propertyNumber || "\u00A0"}</td>
-              <td className="border border-black p-2">{renderIcsCell(item)}</td>
-              <td className="border border-black p-2">
+            <tr key={item.propertyNumber ?? index} className="h-6 align-top">
+              <td className="border border-black p-1">{item.dateAcquired || "\u00A0"}</td>
+              <td className="border border-black p-1">{item.propertyNumber || "\u00A0"}</td>
+              <td className="border border-black p-1">{renderIcsCell(item)}</td>
+              <td className="border border-black p-1">
                 {item.description}
                 {item.quantity ? ` (Qty: ${item.quantity})` : ""}
               </td>
-              <td className="border border-black p-2 text-right">
+              <td className="border border-black p-1 text-right">
                 {item.amount !== undefined ? formatCurrency(item.amount) : "\u00A0"}
               </td>
-              <td className="border border-black p-2 text-center">{item.condition || "\u00A0"}</td>
+              <td className="border border-black p-1 text-center">{item.condition || "\u00A0"}</td>
             </tr>
           ))}
           {Array.from({ length: blankRows }).map((_, index) => (
-            <tr key={`blank-${index}`} className="h-10">
-              <td className="border border-black p-2">&nbsp;</td>
-              <td className="border border-black p-2">&nbsp;</td>
-              <td className="border border-black p-2">&nbsp;</td>
-              <td className="border border-black p-2">&nbsp;</td>
-              <td className="border border-black p-2">&nbsp;</td>
-              <td className="border border-black p-2">&nbsp;</td>
+            <tr key={`blank-${index}`} className="h-6">
+              <td className="border border-black p-1">&nbsp;</td>
+              <td className="border border-black p-1">&nbsp;</td>
+              <td className="border border-black p-1">&nbsp;</td>
+              <td className="border border-black p-1">&nbsp;</td>
+              <td className="border border-black p-1">&nbsp;</td>
+              <td className="border border-black p-1">&nbsp;</td>
             </tr>
           ))}
         </tbody>
       </table>
 
-      <div className="mt-4">
+      <div className="mt-2">
         <div className="font-semibold text-sm mb-1">Reasons for Transfer:</div>
-        <div className="border border-black h-24 p-3 leading-tight text-sm">
+        <div className="border border-black h-16 p-2 leading-tight text-xs">
           {transfer.reason || "\u00A0"}
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-6 text-sm mt-6">
+      <div className="grid grid-cols-3 gap-4 text-xs mt-4 signature-section">
         {["Approved by", "Released/Issued by", "Received by"].map((label) => (
           <div key={label} className="space-y-4">
             <div className="border-t border-black pt-2 text-center">
               <p className="font-semibold uppercase text-xs">{label}</p>
             </div>
             <div className="space-y-2">
-              {["Signature:", "Printed Name:", "Designation:", "Date:"].map((field) => (
-                <div key={field} className="flex items-center gap-1">
-                  <span className="whitespace-nowrap">{field}</span>
-                  <span className="flex-1 border-b border-black h-4" />
-                </div>
-              ))}
+              {["Signature:", "Printed Name:", "Designation:", "Date:"].map((field) => {
+                const printedName = label === "Approved by"
+                  ? transfer.approvedBy || ""
+                  : label === "Released/Issued by"
+                  ? transfer.fromAccountableOfficer || transfer.issuedBy || ""
+                  : transfer.toAccountableOfficer || transfer.receivedBy || "";
+                const designation = label === "Released/Issued by"
+                  ? transfer.fromAccountableOfficerDepartment || ""
+                  : label === "Received by"
+                  ? transfer.toAccountableOfficerDepartment || ""
+                  : "";
+                return (
+                  <div key={field} className="flex items-center gap-1">
+                    <span className="whitespace-nowrap">{field}</span>
+                    {field === "Printed Name:" ? (
+                      <span className="flex-1 border-b border-black h-4">
+                        {printedName}
+                      </span>
+                    ) : field === "Designation:" ? (
+                      <span className="flex-1 border-b border-black h-4">
+                        {designation}
+                      </span>
+                    ) : (
+                      <span className="flex-1 border-b border-black h-4" />
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         ))}
@@ -423,12 +504,13 @@ export const Transfers = () => {
   const [isItemSelectorOpen, setItemSelectorOpen] = useState(false);
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [itemSearchTerm, setItemSearchTerm] = useState("");
-  const printRef = useRef<HTMLDivElement>(null);
+  
   const { toast } = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const [formData, setFormData] = useState<TransferFormState>(INITIAL_FORM_STATE);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   // Load transfers from database on mount
   useEffect(() => {
@@ -442,8 +524,6 @@ export const Transfers = () => {
           .select(`
             id,
             transfer_number,
-            entity_name,
-            fund_cluster,
             from_department,
             to_department,
             transfer_type,
@@ -461,8 +541,7 @@ export const Transfers = () => {
               property_number,
               description,
               quantity,
-              condition,
-              inventory_item_id
+              condition
             )
           `)
           .order("date_requested", { ascending: false });
@@ -479,8 +558,6 @@ export const Transfers = () => {
             .select(`
               id,
               transfer_number,
-              entity_name,
-              fund_cluster,
               from_department,
               to_department,
               transfer_type,
@@ -512,9 +589,9 @@ export const Transfers = () => {
         }
 
         // Transform database records to Transfer interface
-        const loadedTransfers: Transfer[] = await Promise.all((data || []).map(async (record: any) => {
+        const loadedTransfers: Transfer[] = await Promise.all((data || []).map(async (record: DbTransferRecordRow) => {
           // For each transfer item, fetch additional data from related tables
-          const enrichedItems = await Promise.all((record.transfer_items || []).map(async (item: any) => {
+          const enrichedItems = await Promise.all((record.transfer_items || []).map(async (item: DbTransferItemRow) => {
             let icsSlipNumber = null;
             let icsDate = null;
             let amount = null;
@@ -574,6 +651,47 @@ export const Transfers = () => {
               }
             }
 
+            // Fallback lookups by property number to ensure ICS/date/amount populated
+            if (!dateAcquired || amount === null) {
+              const { data: invByProp } = await supabase
+                .from("inventory_items")
+                .select("date_acquired, unit_cost, total_cost")
+                .eq("property_number", item.property_number)
+                .limit(1)
+                .maybeSingle();
+              if (invByProp) {
+                dateAcquired = invByProp.date_acquired;
+                amount = invByProp.total_cost || invByProp.unit_cost || null;
+              }
+            }
+
+            if (!icsSlipNumber || !icsDate) {
+              const { data: slipItemByProp } = await supabase
+                .from("custodian_slip_items")
+                .select(`
+                  date_issued,
+                  custodian_slips!inner (
+                    slip_number,
+                    date_issued
+                  )
+                `)
+                .eq("property_number", item.property_number)
+                .order("date_issued", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+              if (slipItemByProp) {
+                const join = slipItemByProp as {
+                  date_issued?: string;
+                  custodian_slips?: { slip_number?: string; date_issued?: string } | { slip_number?: string; date_issued?: string }[];
+                };
+                const slips = join.custodian_slips;
+                const slip = Array.isArray(slips) ? slips[0] : slips;
+                if (slip && slip.slip_number) icsSlipNumber = slip.slip_number;
+                const issued = join.date_issued || (slip && slip.date_issued) || null;
+                if (issued) icsDate = issued;
+              }
+            }
+
             return {
               propertyNumber: item.property_number,
               description: item.description,
@@ -589,25 +707,28 @@ export const Transfers = () => {
 
           return {
             id: record.id,
-            entityName: record.entity_name || "PROVINCIAL GOVERNMENT OF APAYAO", // Default entity name
+            entityName: record.entity_name || "PROVINCIAL GOVERNMENT OF APAYAO",
             fromAccountableOfficer: record.from_department,
             toAccountableOfficer: record.to_department,
-            fundCluster: record.fund_cluster || "", // Will be empty if not in schema
+            fundCluster: record.fund_cluster || "",
             itrNumber: record.transfer_number,
             date: record.date_requested,
             transferType: record.transfer_type as TransferType || "Donation",
             reason: record.reason,
-            status: record.status as TransferStatus,
+            status: DB_TO_UI_STATUS[record.status] || "Draft",
             dateCompleted: record.date_completed,
             items: enrichedItems,
             history: [
               {
                 timestamp: record.created_at,
-                status: record.status,
+                status: DB_TO_UI_STATUS[record.status] || "Draft",
                 action: "Transfer created",
                 details: `Created ${record.transfer_number}`,
               },
             ],
+            approvedBy: record.approved_by || "",
+            issuedBy: record.requested_by || "",
+            receivedBy: record.to_department || "",
           };
         }));
 
@@ -641,31 +762,31 @@ export const Transfers = () => {
     queryKey: ["transfer-ics-options"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("custodian_slips")
+        .from("custodian_slip_items")
         .select(`
           id,
-          slip_number,
+          property_number,
+          description,
+          quantity,
+          unit,
           date_issued,
-          custodian_name,
-          custodian_slip_items (
+          inventory_item_id,
+          inventory_items (
             id,
-            inventory_item_id,
+            date_acquired,
             property_number,
-            description,
-            quantity,
-            unit,
+            total_cost,
+            condition
+          ),
+          custodian_slips!inner (
+            id,
+            slip_number,
             date_issued,
-            inventory_items (
-              id,
-              date_acquired,
-              property_number,
-              total_cost,
-              condition
-            )
+            custodian_name
           )
         `)
         .order("date_issued", { ascending: false })
-        .limit(100);
+        .limit(500);
 
       if (error) {
         console.error("Failed to load custodian slip items for transfers", error);
@@ -673,32 +794,31 @@ export const Transfers = () => {
       }
 
       const items: CustodianItemOption[] = [];
-      for (const slip of data || []) {
-        const slipItems = slip.custodian_slip_items || [];
-        for (const item of slipItems) {
-          const inventoryItem = Array.isArray(item.inventory_items) 
-            ? item.inventory_items[0] 
-            : item.inventory_items;
-          
-          items.push({
-            id: item.id,
-            propertyNumber: item.property_number || "",
-            description: item.description || "",
-            quantity: item.quantity || 0,
-            condition: inventoryItem?.condition || "",
-            amount: Number(inventoryItem?.total_cost ?? 0),
-            dateAcquired: inventoryItem?.date_acquired || "",
-            custodianName: slip.custodian_name || "",
-            icsSlipId: slip.id,
-            icsSlipNumber: slip.slip_number || "",
-            icsDate: item.date_issued || slip.date_issued || "",
-            inventoryItemId: item.inventory_item_id || inventoryItem?.id || "",
-          });
-        }
+      for (const row of data || []) {
+        const inventoryItem = Array.isArray(row.inventory_items)
+          ? row.inventory_items[0]
+          : row.inventory_items;
+        const slip = Array.isArray(row.custodian_slips)
+          ? row.custodian_slips[0]
+          : row.custodian_slips;
+
+        items.push({
+          id: row.id,
+          propertyNumber: row.property_number || "",
+          description: row.description || inventoryItem?.description || "",
+          quantity: row.quantity || 0,
+          condition: inventoryItem?.condition || "",
+          amount: Number(inventoryItem?.total_cost ?? 0),
+          dateAcquired: inventoryItem?.date_acquired || "",
+          custodianName: slip?.custodian_name || "",
+          icsSlipId: slip?.id || "",
+          icsSlipNumber: slip?.slip_number || "",
+          icsDate: row.date_issued || slip?.date_issued || "",
+          inventoryItemId: row.inventory_item_id || inventoryItem?.id || "",
+        });
       }
 
-      console.log('Loaded ICS options for transfer:', {
-        totalSlips: data?.length,
+      console.log('Loaded ICS options for transfer (items join):', {
         totalItems: items.length,
         custodians: [...new Set(items.map(i => i.custodianName))],
         sampleItems: items.slice(0, 3)
@@ -709,25 +829,61 @@ export const Transfers = () => {
     staleTime: 5 * 60 * 1000,
   });
 
+  const { data: currentAssigned = [] } = useQuery({
+    queryKey: ["current-assigned-items", formData.fromAccountableOfficer],
+    enabled: !!formData.fromAccountableOfficer,
+    queryFn: async () => {
+      if (!formData.fromAccountableOfficer) return [] as CustodianItemOption[];
+      const { data, error } = await supabase
+        .from("inventory_items")
+        .select("id, property_number, description, quantity, condition, total_cost, date_acquired")
+        .eq("custodian", formData.fromAccountableOfficer)
+        .eq("assignment_status", "Assigned")
+        .eq("status", "Active")
+        .limit(500);
+      if (error) throw error;
+      return (data || []).map((inv: DbInventoryItemRow) => ({
+        id: inv.id,
+        propertyNumber: inv.property_number,
+        description: inv.description || "",
+        quantity: inv.quantity || 1,
+        condition: inv.condition || "",
+        amount: Number(inv.total_cost ?? 0),
+        dateAcquired: inv.date_acquired || "",
+        custodianName: formData.fromAccountableOfficer,
+        icsSlipId: "",
+        icsSlipNumber: "",
+        icsDate: "",
+        inventoryItemId: inv.id,
+      }));
+    },
+    staleTime: 60 * 1000,
+  });
+
   const availableIcsItems = useMemo(() => {
     const normalizedFromOfficer = formData.fromAccountableOfficer
       ? formData.fromAccountableOfficer.toLowerCase().trim()
       : "";
     const alreadyAdded = new Set(formData.items.map((item) => item.propertyNumber));
 
-    let filtered = icsOptions.filter((item) => {
+    const fromIcs = icsOptions.filter((item) => {
       if (alreadyAdded.has(item.propertyNumber)) return false;
-      if (normalizedFromOfficer) {
-        // Normalize the custodian name for comparison
-        const normalizedItemCustodian = (item.custodianName || "").toLowerCase().trim();
-        return normalizedItemCustodian === normalizedFromOfficer;
-      }
-      return true;
+      if (!normalizedFromOfficer) return true;
+      const normalizedItemCustodian = (item.custodianName || "").toLowerCase().trim();
+      return normalizedItemCustodian === normalizedFromOfficer;
     });
 
-    // Apply search term filter
+    const fromCurrent = (currentAssigned || []).filter((item) => !alreadyAdded.has(item.propertyNumber));
+
+    // Merge and dedupe by property number
+    const mergedMap = new Map<string, CustodianItemOption>();
+    [...fromIcs, ...fromCurrent].forEach((item) => {
+      if (!mergedMap.has(item.propertyNumber)) mergedMap.set(item.propertyNumber, item);
+    });
+    let merged = Array.from(mergedMap.values());
+
     if (itemSearchTerm) {
-      filtered = filtered.filter((item) => {
+      merged = merged.filter((item) => {
         const haystack = `${item.propertyNumber} ${item.description} ${item.icsSlipNumber} ${item.custodianName || ""}`.toLowerCase();
         return haystack.includes(itemSearchTerm.toLowerCase());
       });
@@ -735,13 +891,13 @@ export const Transfers = () => {
 
     console.log('Filtered ICS items:', {
       fromOfficer: formData.fromAccountableOfficer,
-      totalOptions: icsOptions.length,
-      filteredCount: filtered.length,
-      items: filtered.map(i => ({ custodian: i.custodianName, propertyNumber: i.propertyNumber }))
+      totalOptions: (icsOptions.length + (currentAssigned?.length || 0)),
+      filteredCount: merged.length,
+      items: merged.map(i => ({ custodian: i.custodianName, propertyNumber: i.propertyNumber }))
     });
 
-    return filtered;
-  }, [icsOptions, formData.fromAccountableOfficer, formData.items, itemSearchTerm]);
+    return merged;
+  }, [icsOptions, currentAssigned, formData.fromAccountableOfficer, formData.items, itemSearchTerm]);
 
   const filteredTransfers = useMemo(() => {
     const lowerSearch = searchTerm.toLowerCase();
@@ -771,12 +927,12 @@ export const Transfers = () => {
   useEffect(() => {
     if (isCreating) {
       // Generate ITR number asynchronously
-      generateNextItrNumber(transfers).then((nextNumber) => {
+      generateNextItrNumber(transfers, []).then((nextNumber) => {
         setFormData((prev) => ({
           ...INITIAL_FORM_STATE,
           ...prev,
-        itrNumber: prev.itrNumber || nextNumber,
-        status: "Draft",
+          itrNumber: prev.itrNumber || nextNumber,
+          status: "Draft",
         }));
       });
       setErrors({});
@@ -803,7 +959,7 @@ export const Transfers = () => {
   };
 
   const handleGenerateItrNumber = async () => {
-    const nextNumber = await generateNextItrNumber(transfers);
+    const nextNumber = await generateNextItrNumber(transfers, formData.items || []);
     setFormData((prev) => ({ ...prev, itrNumber: nextNumber }));
   };
 
@@ -820,11 +976,12 @@ export const Transfers = () => {
     }
 
     try {
+    setIsProcessing(true);
     const now = new Date().toISOString();
     // Generate ITR number if not provided, ensuring it's unique
     let itrNumber = formData.itrNumber;
     if (!itrNumber) {
-      itrNumber = await generateNextItrNumber(transfers);
+      itrNumber = await generateNextItrNumber(transfers, formData.items || []);
     }
     
     // Double-check uniqueness before inserting
@@ -874,27 +1031,30 @@ export const Transfers = () => {
       
       while (retryCount < maxRetries) {
         transferError = null;
-        const { error } = await supabase
-          .from("property_transfers")
-          .insert({
-            id: transferId,
-            transfer_number: itrNumber,
-            entity_name: formData.entityName.trim(),
-            fund_cluster: formData.fundCluster.trim(),
-            from_department: formData.fromAccountableOfficer,
-            to_department: formData.toAccountableOfficer,
-            transfer_type: dbTransferType,
-            status: formData.status,
-            date_requested: formData.date,
-            reason: formData.reason,
-            requested_by: currentUserId,
-          });
+        const basePayload: TransferInsertPayload = {
+          id: transferId,
+          transfer_number: itrNumber,
+          from_department: formData.fromAccountableOfficer,
+          to_department: formData.toAccountableOfficer,
+          transfer_type: dbTransferType,
+          status: UI_TO_DB_STATUS[formData.status] || "Pending",
+          date_requested: formData.date,
+          reason: formData.reason,
+          requested_by: currentUserId,
+        };
+        const withOptional = { ...basePayload, entity_name: formData.entityName.trim(), fund_cluster: formData.fundCluster.trim() };
+        let insertResult = await supabase.from("property_transfers").insert(withOptional);
+        let error = insertResult.error;
+        if (error && (error.message?.includes("entity_name") || error.message?.includes("fund_cluster"))) {
+          insertResult = await supabase.from("property_transfers").insert(basePayload);
+          error = insertResult.error;
+        }
 
         if (error) {
           // If it's a duplicate key error, generate a new number and retry
           if (error.code === '23505' && error.message?.includes('transfer_number')) {
             console.warn(`Duplicate ITR number ${itrNumber} detected, generating new number...`);
-            itrNumber = await generateNextItrNumber(transfers);
+            itrNumber = await generateNextItrNumber(transfers, formData.items || []);
             retryCount++;
             continue;
           }
@@ -908,8 +1068,8 @@ export const Transfers = () => {
 
       if (transferError) throw transferError;
 
-      // Save transfer items to database with all tracking fields
-      const transferItems = formData.items.map((item) => ({
+      // Save transfer items with graceful fallback for missing optional columns
+      const transferItemsFull = formData.items.map((item) => ({
         id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`,
         transfer_id: transferId,
         property_number: item.propertyNumber,
@@ -923,18 +1083,115 @@ export const Transfers = () => {
         to_custodian: formData.toAccountableOfficer,
       }));
 
-      if (transferItems.length > 0) {
-        const { error: itemsError } = await supabase
-          .from("transfer_items")
-          .insert(transferItems);
+      const transferItemsBase = formData.items.map((item) => ({
+        id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+        transfer_id: transferId,
+        property_number: item.propertyNumber,
+        description: item.description,
+        quantity: item.quantity,
+        condition: item.condition,
+      }));
 
+      if (transferItemsFull.length > 0) {
+        const itemsResult = await supabase.from("transfer_items").insert(transferItemsFull);
+        let itemsError = itemsResult.error;
+        if (
+          itemsError && (
+            itemsError.code === 'PGRST204' ||
+            (itemsError.message?.includes('inventory_item_id')) ||
+            (itemsError.message?.includes('ics_slip_id')) ||
+            (itemsError.message?.includes('custodian_slip_item_id')) ||
+            (itemsError.message?.includes('from_custodian')) ||
+            (itemsError.message?.includes('to_custodian'))
+          )
+        ) {
+          const fallback = await supabase.from("transfer_items").insert(transferItemsBase);
+          itemsError = fallback.error;
+        }
         if (itemsError) throw itemsError;
       }
 
-      // NOTE: Do NOT update custodian assignments when creating a transfer
-      // Assignments will only be updated when the transfer status is changed to "Completed"
-      // This ensures items remain with the original custodian until the transfer is finalized
+      let toCustodianPosition = "";
+      if (formData.toAccountableOfficer) {
+        const { data: custodianData } = formData.toAccountableOfficerId
+          ? await supabase.from("custodians").select("position").eq("id", formData.toAccountableOfficerId).single()
+          : await supabase.from("custodians").select("position").eq("name", formData.toAccountableOfficer).single();
+        toCustodianPosition = custodianData?.position || "";
+      }
+      for (const item of formData.items) {
+        let inventoryItemId = item.inventoryItemId;
+        if (!inventoryItemId && item.propertyNumber) {
+          const { data: invLookup } = await supabase
+            .from("inventory_items")
+            .select("id")
+            .eq("property_number", item.propertyNumber)
+            .single();
+          if (invLookup) inventoryItemId = invLookup.id;
+        }
+        if (inventoryItemId) {
+          const upd = await supabase
+            .from("inventory_items")
+            .update({
+              custodian: formData.toAccountableOfficer,
+              custodian_position: toCustodianPosition,
+              assignment_status: "Assigned",
+              assigned_date: new Date().toISOString().split("T")[0],
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", inventoryItemId);
+          if (upd.error) {
+            await supabase
+              .from("inventory_items")
+              .update({ custodian: formData.toAccountableOfficer })
+              .eq("id", inventoryItemId);
+          }
+        }
+        const { data: propertyCard } = await supabase
+          .from("property_cards")
+          .select("id")
+          .eq("property_number", item.propertyNumber)
+          .single();
+        if (propertyCard) {
+          let lastBalance = 0;
+          const { data: lastEntry } = await supabase
+            .from("property_card_entries")
+            .select("balance_qty")
+            .eq("property_card_id", propertyCard.id)
+            .order("date", { ascending: false })
+            .limit(1)
+            .single();
+          if (lastEntry && typeof lastEntry.balance_qty === "number") {
+            lastBalance = lastEntry.balance_qty;
+          }
+          const issueQty = item.quantity || 1;
+          const newBalance = Math.max(0, (lastBalance || 0) - issueQty);
 
+          await supabase
+            .from("property_card_entries")
+            .insert({
+              property_card_id: propertyCard.id,
+              date: new Date().toISOString().split("T")[0],
+              reference: `ITR ${itrNumber}`,
+              receipt_qty: 0,
+              unit_cost: 0,
+              total_cost: 0,
+              issue_item_no: item.propertyNumber || "",
+              issue_qty: issueQty,
+              office_officer: `${formData.toAccountableOfficer}${toCustodianPosition ? ` (${toCustodianPosition})` : ""}`,
+              balance_qty: newBalance,
+              amount: 0,
+              remarks: `Transferred from ${formData.fromAccountableOfficer} to ${formData.toAccountableOfficer}`,
+              related_transfer_id: transferId,
+            });
+        }
+      }
+      queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+      queryClient.invalidateQueries({ queryKey: ['custodian-summaries'] });
+      queryClient.invalidateQueries({ queryKey: ['custodian-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['custodian-current-items'] });
+      queryClient.invalidateQueries({ queryKey: ['custodian-item-history'] });
+      queryClient.refetchQueries({ queryKey: ['inventory-items'] });
+      queryClient.refetchQueries({ queryKey: ['custodian-summaries'] });
       // Reload transfers to show the new one
       let reloadedData, reloadError;
       const reloadQuery = await supabase
@@ -1043,8 +1300,10 @@ export const Transfers = () => {
         title: "Transfer saved",
         description: `Transfer ${itrNumber} has been saved and related records updated.`,
       });
+      setIsProcessing(false);
     } catch (err) {
       console.error("Error creating transfer:", err);
+      setIsProcessing(false);
       toast({
         title: "Error saving transfer",
         description: err instanceof Error ? err.message : "Failed to save transfer",
@@ -1055,6 +1314,7 @@ export const Transfers = () => {
 
   const handleStatusUpdate = async (transferId: string, newStatus: TransferStatus) => {
     try {
+      setIsProcessing(true);
       const dateCompleted = newStatus === "Completed" ? new Date().toISOString().split("T")[0] : null;
 
       // Get the transfer with its items before updating
@@ -1067,7 +1327,7 @@ export const Transfers = () => {
       const { error } = await supabase
         .from("property_transfers")
         .update({
-          status: newStatus,
+          status: UI_TO_DB_STATUS[newStatus] || "Pending",
           ...(dateCompleted && { date_completed: dateCompleted }),
         })
         .eq("id", transferId);
@@ -1215,6 +1475,7 @@ export const Transfers = () => {
             ? `Transfer marked as completed. ${transfer.items?.length || 0} item(s) have been reassigned to ${transfer.toAccountableOfficer}.`
             : `Transfer marked as ${newStatus}.`,
       });
+      setIsProcessing(false);
     } catch (err) {
       console.error("Error updating transfer status:", err);
       toast({
@@ -1222,6 +1483,7 @@ export const Transfers = () => {
         description: err instanceof Error ? err.message : "Failed to update transfer status",
         variant: "destructive",
       });
+      setIsProcessing(false);
     }
   };
 
@@ -1232,7 +1494,7 @@ export const Transfers = () => {
       const { error: updateError } = await supabase
         .from("property_transfers")
         .update({ 
-          status: 'Issued',
+          status: UI_TO_DB_STATUS["Issued"],
           updated_at: new Date().toISOString()
         })
         .eq("id", transferId);
@@ -1241,15 +1503,35 @@ export const Transfers = () => {
         throw new Error(`Failed to confirm transfer: ${updateError.message}`);
       }
     },
-    onSuccess: () => {
+    onSuccess: (_data, transferId) => {
       toast({ 
         title: "Success", 
         description: "Transfer has been officially confirmed and cannot be deleted" 
       });
-      queryClient.invalidateQueries({ queryKey: ['transfers'] });
-      queryClient.refetchQueries({ queryKey: ['transfers'] });
+      setIsProcessing(false);
+      setTransfers(prev => prev.map(t => {
+        if (t.id !== transferId) return t;
+        const timestamp = new Date().toISOString();
+        return {
+          ...t,
+          status: "Issued",
+          history: [
+            ...t.history,
+            {
+              timestamp,
+              status: "Issued",
+              action: "Transfer confirmed",
+              details: `Confirmed ${t.itrNumber}`,
+            },
+          ],
+        };
+      }));
+      queryClient.invalidateQueries({ queryKey: ['property-transfers'] });
+      queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+      queryClient.invalidateQueries({ queryKey: ['custodian-summaries'] });
     },
     onError: (error: Error) => {
+      setIsProcessing(false);
       toast({ 
         title: "Error", 
         description: error.message, 
@@ -1260,11 +1542,13 @@ export const Transfers = () => {
 
   const handleConfirmTransfer = (transferId: string) => {
     if (confirm("Are you sure you want to officially confirm this transfer? Once confirmed, it cannot be deleted and will be marked as an official document.")) {
+      setIsProcessing(true);
       confirmTransferMutation.mutate(transferId);
     }
   };
 
   const handleDeleteTransfer = async (transferId: string) => {
+    setIsProcessing(true);
     // Get transfer to check status
     const transfer = transfers.find((t) => t.id === transferId);
     if (transfer?.status === "Issued") {
@@ -1273,10 +1557,12 @@ export const Transfers = () => {
         description: "Issued transfers cannot be deleted. Only Draft transfers can be deleted.",
         variant: "destructive",
       });
+      setIsProcessing(false);
       return;
     }
 
     if (!window.confirm("Are you sure you want to delete this transfer? This action cannot be undone.")) {
+      setIsProcessing(false);
       return;
     }
 
@@ -1304,8 +1590,10 @@ export const Transfers = () => {
         title: "Transfer deleted",
         description: "The transfer has been permanently removed.",
       });
+      setIsProcessing(false);
     } catch (err) {
       console.error("Error deleting transfer:", err);
+      setIsProcessing(false);
       toast({
         title: "Error deleting transfer",
         description: err instanceof Error ? err.message : "Failed to delete transfer",
@@ -1316,13 +1604,8 @@ export const Transfers = () => {
 
   const handlePrint = (transfer: Transfer) => {
     setSelectedTransfer(transfer);
-    // Use a longer timeout to ensure DOM is updated before printing
     setTimeout(() => {
       window.print();
-      // Clear the transfer after printing
-      setTimeout(() => {
-        setSelectedTransfer(null);
-      }, 500);
     }, 300);
   };
 
@@ -1432,6 +1715,13 @@ export const Transfers = () => {
     setItemSelectorOpen(false);
   };
 
+  const updateItemField = (propertyNumber: string, field: keyof TransferItem, value: TransferItem[keyof TransferItem]) => {
+    setFormData((prev) => ({
+      ...prev,
+      items: prev.items.map((it) => (it.propertyNumber === propertyNumber ? { ...it, [field]: value } : it)),
+    }));
+  };
+
   const previewTransfer: Transfer = useMemo(
     () => ({
       id: "preview",
@@ -1453,6 +1743,7 @@ export const Transfers = () => {
     [formData]
   );
 
+  const [isEditMode, setIsEditMode] = useState(false);
   const totalSelectedAmount = formData.items.reduce((sum, item) => sum + (item.amount ?? 0), 0);
   const isPreviewReady =
     isCreating &&
@@ -1594,7 +1885,7 @@ export const Transfers = () => {
                       onChange={(event) =>
                         setFormData({ ...formData, itrNumber: event.target.value.toUpperCase() })
                       }
-                      placeholder="ITR-2025-0001"
+                      placeholder="ITR 2025-11-SPHV-0001"
                     />
                     <Button type="button" variant="outline" onClick={handleGenerateItrNumber}>
                       Generate
@@ -1604,7 +1895,7 @@ export const Transfers = () => {
                     <p className="mt-1 text-sm text-destructive">{errors.itrNumber}</p>
                   )}
                   <p className="text-xs text-muted-foreground mt-1">
-                    Format suggestion: ITR-YYYY-#### (independent sequence from ICS numbers)
+                    Format: ITR YYYY-MM-SPHV|SPLV-#### (per month and value category)
                   </p>
                 </div>
                 <div>
@@ -1709,6 +2000,9 @@ export const Transfers = () => {
                     <Button type="button" variant="outline" size="sm" onClick={handleOpenItemSelector}>
                       Select from ICS
                     </Button>
+                    <Button type="button" variant="secondary" size="sm" onClick={() => setIsEditMode((v) => !v)}>
+                      {isEditMode ? "Disable Edit" : "Enable Edit"}
+                    </Button>
                     {isLoadingIcs && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                   </div>
                 </div>
@@ -1739,16 +2033,47 @@ export const Transfers = () => {
                               <TableCell className="font-medium">{item.propertyNumber}</TableCell>
                               <TableCell>{icsDisplay || "—"}</TableCell>
                               <TableCell>
-                                <div className="font-medium">{item.description}</div>
-                                <div className="text-xs text-muted-foreground">
-                                  {formatDate(item.dateAcquired)}
-                                  {item.quantity ? ` • Qty: ${item.quantity}` : ""}
-                                </div>
+                                {isEditMode ? (
+                                  <div className="space-y-1">
+                                    <Input
+                                      value={item.description}
+                                      onChange={(e) => updateItemField(item.propertyNumber, 'description', e.target.value)}
+                                    />
+                                    <div className="text-xs text-muted-foreground">
+                                      {formatDate(item.dateAcquired)}{item.quantity ? ` • Qty: ${item.quantity}` : ""}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div className="font-medium">{item.description}</div>
+                                    <div className="text-xs text-muted-foreground">
+                                      {formatDate(item.dateAcquired)}{item.quantity ? ` • Qty: ${item.quantity}` : ""}
+                                    </div>
+                                  </>
+                                )}
                               </TableCell>
                               <TableCell className="text-right">
-                                {item.amount !== undefined ? formatCurrency(item.amount) : "—"}
+                                {isEditMode ? (
+                                  <Input
+                                    type="number"
+                                    value={item.amount ?? 0}
+                                    onChange={(e) => updateItemField(item.propertyNumber, 'amount', Number(e.target.value))}
+                                    className="w-28 text-right"
+                                  />
+                                ) : (
+                                  item.amount !== undefined ? formatCurrency(item.amount) : "—"
+                                )}
                               </TableCell>
-                              <TableCell>{item.condition || "—"}</TableCell>
+                              <TableCell>
+                                {isEditMode ? (
+                                  <Input
+                                    value={item.condition || ""}
+                                    onChange={(e) => updateItemField(item.propertyNumber, 'condition', e.target.value)}
+                                  />
+                                ) : (
+                                  item.condition || "—"
+                                )}
+                              </TableCell>
                               <TableCell className="text-right">
                                 <div className="flex items-center justify-end gap-2">
                                   <Button
@@ -1818,21 +2143,7 @@ export const Transfers = () => {
             </CardContent>
           </Card>
 
-          {isPreviewReady && (
-            <Card className="xl:sticky xl:top-24 h-fit">
-              <CardHeader>
-                <CardTitle>Print Preview</CardTitle>
-                <p className="text-sm text-muted-foreground">
-                  Updates automatically as you complete the form. This mirrors the Annex A.5 layout.
-                </p>
-              </CardHeader>
-              <CardContent>
-                <ScrollArea className="max-h-[70vh] pr-2">
-                  {renderPrintLayout(previewTransfer, true)}
-                </ScrollArea>
-              </CardContent>
-            </Card>
-          )}
+
         </div>
       )}
 
@@ -2042,10 +2353,11 @@ export const Transfers = () => {
         )}
       </div>
 
-      {selectedTransfer && (
-        <div className="print-only" ref={printRef} style={{ display: 'none' }}>
+      {selectedTransfer && createPortal(
+        <div className="print-only">
           {renderPrintLayout(selectedTransfer)}
-        </div>
+        </div>,
+        document.body
       )}
 
       <Dialog open={isItemSelectorOpen} onOpenChange={setItemSelectorOpen}>
@@ -2064,21 +2376,21 @@ export const Transfers = () => {
               onChange={(event) => setItemSearchTerm(event.target.value)}
             />
             <div className="border rounded-md h-[360px] overflow-hidden">
-              <Table>
+              <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[40px]" />
-                    <TableHead>Item No.</TableHead>
+                    <TableHead className="w-[48px]" />
+                    <TableHead className="w-[160px]">Item No.</TableHead>
                     <TableHead>Description</TableHead>
-                    <TableHead>ICS No.</TableHead>
-                    <TableHead>Date Issued</TableHead>
-                    <TableHead>Amount</TableHead>
-                    <TableHead>Condition</TableHead>
+                    <TableHead className="w-[200px]">ICS No.</TableHead>
+                    <TableHead className="w-[140px]">Date Issued</TableHead>
+                    <TableHead className="w-[140px] text-right">Amount</TableHead>
+                    <TableHead className="w-[160px]">Condition</TableHead>
                   </TableRow>
                 </TableHeader>
               </Table>
               <ScrollArea className="h-[300px]">
-                <Table>
+                <Table className="table-fixed">
                   <TableBody>
                     {isLoadingIcs ? (
                       <TableRow>
@@ -2104,18 +2416,18 @@ export const Transfers = () => {
                             className="cursor-pointer"
                             onClick={() => handleToggleItemSelection(item.id)}
                           >
-                            <TableCell className="w-[40px]">
+                            <TableCell className="w-[48px]">
                               <Checkbox
                                 checked={checked}
                                 onCheckedChange={() => handleToggleItemSelection(item.id)}
                               />
                             </TableCell>
-                            <TableCell className="font-medium">{item.propertyNumber}</TableCell>
-                            <TableCell>{item.description}</TableCell>
-                            <TableCell>{item.icsSlipNumber}</TableCell>
-                            <TableCell>{formatDate(item.icsDate)}</TableCell>
-                            <TableCell>{item.amount !== undefined ? formatCurrency(item.amount) : "—"}</TableCell>
-                            <TableCell>{item.condition || "—"}</TableCell>
+                            <TableCell className="w-[160px] font-medium">{item.propertyNumber}</TableCell>
+                            <TableCell className="truncate">{item.description || "—"}</TableCell>
+                            <TableCell className="w-[200px] truncate">{item.icsSlipNumber || "—"}</TableCell>
+                            <TableCell className="w-[140px]">{formatDate(item.icsDate)}</TableCell>
+                            <TableCell className="w-[140px] text-right">{item.amount !== undefined ? formatCurrency(item.amount) : "—"}</TableCell>
+                            <TableCell className="w-[160px]">{item.condition || "—"}</TableCell>
                           </TableRow>
                         );
                       })
@@ -2145,13 +2457,21 @@ export const Transfers = () => {
 
       <style>{`
         @media print {
+          body > :not(.print-only) { display: none !important; }
           .print-only { display: block !important; }
-          body * { visibility: hidden; }
-          .print-only, .print-only * { visibility: visible; }
-          .print-only { position: absolute; left: 0; top: 0; width: 100%; }
+          .signature-section { break-inside: avoid; }
         }
         .print-only { display: none; }
       `}</style>
+
+      {isProcessing && (
+        <div className="fixed inset-0 z-[10000] bg-black/50 flex items-center justify-center">
+          <div className="bg-white rounded-md p-6 flex items-center gap-3">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            <span>Updating…</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

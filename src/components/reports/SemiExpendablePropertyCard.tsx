@@ -13,6 +13,16 @@ export const SemiExpendablePropertyCard: React.FC<PropertyCardProps> = ({ data }
     window.print();
   };
 
+  const entries = React.useMemo(() => {
+    let running = 0;
+    return (data.entries || []).map((e) => {
+      const receipt = Number(e.receiptQty || 0);
+      const issue = Number(e.issueQty || 0);
+      running = running + receipt - issue;
+      return { ...e, balanceQty: e.balanceQty || running } as AnnexSPCEntry;
+    });
+  }, [data.entries]);
+
   return (
     <div className="max-w-5xl mx-auto">
       <div className="flex justify-between items-center mb-4 print:hidden">
@@ -94,7 +104,7 @@ export const SemiExpendablePropertyCard: React.FC<PropertyCardProps> = ({ data }
                 </tr>
               </thead>
               <tbody>
-                {data.entries.map((entry, index) => (
+                {entries.map((entry, index) => (
                   <tr key={index} className="border-b border-gray-300">
                     <td className="border-r border-black p-2 text-center align-top">{entry.date}</td>
                     <td className="border-r border-black p-2 text-center align-top">{entry.reference}</td>

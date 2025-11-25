@@ -152,7 +152,7 @@ export const inventoryService = {
 
   // Update inventory item
   async update(id: string, updates: Partial<InventoryItem>): Promise<SupabaseResponse<InventoryItem>> {
-    const updateData: any = {};
+    const updateData: Record<string, unknown> = {};
     
     if (updates.propertyNumber) updateData.property_number = updates.propertyNumber;
     if (updates.description) updateData.description = updates.description;
@@ -300,7 +300,7 @@ export const departmentService = {
     limit?: number;
     isActive?: boolean;
     search?: string;
-  } = {}): Promise<PaginatedResponse<any>> {
+  } = {}): Promise<PaginatedResponse<Record<string, unknown>>> {
     const { page = 1, limit = 50, isActive, search } = filters;
     const { from, to } = createPaginationParams(page, limit);
 
@@ -329,13 +329,13 @@ export const departmentService = {
     const totalPages = Math.ceil(total / limit);
 
     return {
-      data: response.data || [],
+      data: (response.data || []) as Record<string, unknown>[],
       pagination: { page, limit, total, totalPages },
       success: true,
     };
   },
 
-  async getById(id: string): Promise<SupabaseResponse<any>> {
+  async getById(id: string): Promise<SupabaseResponse<Record<string, unknown>>> {
     const response = await supabase
       .from('departments')
       .select('*')
@@ -343,13 +343,13 @@ export const departmentService = {
       .single();
 
     return {
-      data: response.data,
+      data: (response.data || null) as Record<string, unknown> | null,
       error: response.error?.message || null,
       success: !response.error,
     };
   },
 
-  async create(department: any): Promise<SupabaseResponse<any>> {
+  async create(department: unknown): Promise<SupabaseResponse<Record<string, unknown>>> {
     const response = await supabase
       .from('departments')
       .insert(department)
@@ -357,13 +357,13 @@ export const departmentService = {
       .single();
 
     return {
-      data: response.data,
+      data: (response.data || null) as Record<string, unknown> | null,
       error: response.error?.message || null,
       success: !response.error,
     };
   },
 
-  async update(id: string, updates: any): Promise<SupabaseResponse<any>> {
+  async update(id: string, updates: unknown): Promise<SupabaseResponse<Record<string, unknown>>> {
     const response = await supabase
       .from('departments')
       .update(updates)
@@ -372,7 +372,7 @@ export const departmentService = {
       .single();
 
     return {
-      data: response.data,
+      data: (response.data || null) as Record<string, unknown> | null,
       error: response.error?.message || null,
       success: !response.error,
     };

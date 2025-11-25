@@ -49,12 +49,12 @@ export const dataService = {
     },
 
     // Create new inventory item
-    async create(item: any) {
+    async create(item: unknown) {
       return inventoryApi.create(item);
     },
 
     // Update inventory item
-    async update(id: string, updates: any) {
+    async update(id: string, updates: unknown) {
       return inventoryApi.update(id, updates);
     },
 
@@ -127,12 +127,12 @@ export const dataService = {
     },
 
     // Create new property card
-    async create(card: any) {
+    async create(card: unknown) {
       return propertyCardApi.create(card);
     },
 
     // Update property card
-    async update(id: string, updates: any) {
+    async update(id: string, updates: unknown) {
       return propertyCardApi.update(id, updates);
     },
 
@@ -147,12 +147,12 @@ export const dataService = {
     },
 
     // Add entry to property card
-    async addEntry(propertyCardId: string, entry: any) {
+    async addEntry(propertyCardId: string, entry: unknown) {
       return propertyCardApi.addEntry(propertyCardId, entry);
     },
 
     // Update entry
-    async updateEntry(propertyCardId: string, entryId: string, updates: any) {
+    async updateEntry(propertyCardId: string, entryId: string, updates: unknown) {
       return propertyCardApi.updateEntry(propertyCardId, entryId, updates);
     },
 
@@ -195,12 +195,12 @@ export const dataService = {
     },
 
     // Create new transfer
-    async create(transfer: any) {
+    async create(transfer: unknown) {
       return transferApi.create(transfer);
     },
 
     // Update transfer
-    async update(id: string, updates: any) {
+    async update(id: string, updates: unknown) {
       return transferApi.update(id, updates);
     },
 
@@ -215,12 +215,12 @@ export const dataService = {
     },
 
     // Add item to transfer
-    async addItem(transferId: string, item: any) {
+    async addItem(transferId: string, item: unknown) {
       return transferApi.addItem(transferId, item);
     },
 
     // Update transfer item
-    async updateItem(transferId: string, itemId: string, updates: any) {
+    async updateItem(transferId: string, itemId: string, updates: unknown) {
       return transferApi.updateItem(transferId, itemId, updates);
     },
 
@@ -288,12 +288,12 @@ export const dataService = {
     },
 
     // Create new custodian slip
-    async create(slip: any) {
+    async create(slip: unknown) {
       return custodianSlipApi.create(slip);
     },
 
     // Update custodian slip
-    async update(id: string, updates: any) {
+    async update(id: string, updates: unknown) {
       return custodianSlipApi.update(id, updates);
     },
 
@@ -308,12 +308,12 @@ export const dataService = {
     },
 
     // Add item to custodian slip
-    async addItem(slipId: string, item: any) {
+    async addItem(slipId: string, item: unknown) {
       return custodianSlipApi.addItem(slipId, item);
     },
 
     // Update custodian slip item
-    async updateItem(slipId: string, itemId: string, updates: any) {
+    async updateItem(slipId: string, itemId: string, updates: unknown) {
       return custodianSlipApi.updateItem(slipId, itemId, updates);
     },
 
@@ -361,12 +361,12 @@ export const dataService = {
     },
 
     // Create new physical count
-    async create(count: any) {
+    async create(count: unknown) {
       return physicalCountApi.create(count);
     },
 
     // Update physical count
-    async update(id: string, updates: any) {
+    async update(id: string, updates: unknown) {
       return physicalCountApi.update(id, updates);
     },
 
@@ -381,12 +381,12 @@ export const dataService = {
     },
 
     // Add item to physical count
-    async addItem(countId: string, item: any) {
+    async addItem(countId: string, item: unknown) {
       return physicalCountApi.addItem(countId, item);
     },
 
     // Update physical count item
-    async updateItem(countId: string, itemId: string, updates: any) {
+    async updateItem(countId: string, itemId: string, updates: unknown) {
       return physicalCountApi.updateItem(countId, itemId, updates);
     },
 
@@ -459,12 +459,12 @@ export const dataService = {
     },
 
     // Create new loss report
-    async create(report: any) {
+    async create(report: unknown) {
       return lossReportApi.create(report);
     },
 
     // Update loss report
-    async update(id: string, updates: any) {
+    async update(id: string, updates: unknown) {
       return lossReportApi.update(id, updates);
     },
 
@@ -479,12 +479,12 @@ export const dataService = {
     },
 
     // Add item to loss report
-    async addItem(reportId: string, item: any) {
+    async addItem(reportId: string, item: unknown) {
       return lossReportApi.addItem(reportId, item);
     },
 
     // Update loss report item
-    async updateItem(reportId: string, itemId: string, updates: any) {
+    async updateItem(reportId: string, itemId: string, updates: unknown) {
       return lossReportApi.updateItem(reportId, itemId, updates);
     },
 
@@ -562,12 +562,12 @@ export const dataService = {
     },
 
     // Create new unserviceable report
-    async create(report: any) {
+    async create(report: unknown) {
       return unserviceableReportApi.create(report);
     },
 
     // Update unserviceable report
-    async update(id: string, updates: any) {
+    async update(id: string, updates: unknown) {
       return unserviceableReportApi.update(id, updates);
     },
 
@@ -582,12 +582,12 @@ export const dataService = {
     },
 
     // Add item to unserviceable report
-    async addItem(reportId: string, item: any) {
+    async addItem(reportId: string, item: unknown) {
       return unserviceableReportApi.addItem(reportId, item);
     },
 
     // Update unserviceable report item
-    async updateItem(reportId: string, itemId: string, updates: any) {
+    async updateItem(reportId: string, itemId: string, updates: unknown) {
       return unserviceableReportApi.updateItem(reportId, itemId, updates);
     },
 
@@ -645,12 +645,12 @@ export const dataService = {
     },
 
     // Create new user
-    async create(user: any) {
+    async create(user: unknown) {
       return userApi.create(user);
     },
 
     // Update user
-    async update(id: string, updates: any) {
+    async update(id: string, updates: unknown) {
       return userApi.update(id, updates);
     },
 
@@ -718,12 +718,12 @@ export const dataService = {
     },
 
     // Create new department
-    async create(department: any) {
+    async create(department: unknown) {
       return departmentApi.create(department);
     },
 
     // Update department
-    async update(id: string, updates: any) {
+    async update(id: string, updates: unknown) {
       return departmentApi.update(id, updates);
     },
 
@@ -771,12 +771,12 @@ export const dataService = {
     },
 
     // Create new supplier
-    async create(supplier: any) {
+    async create(supplier: unknown) {
       return supplierApi.create(supplier);
     },
 
     // Update supplier
-    async update(id: string, updates: any) {
+    async update(id: string, updates: unknown) {
       return supplierApi.update(id, updates);
     },
 
@@ -824,12 +824,12 @@ export const dataService = {
     },
 
     // Create new fund source
-    async create(fundSource: any) {
+    async create(fundSource: unknown) {
       return fundSourceApi.create(fundSource);
     },
 
     // Update fund source
-    async update(id: string, updates: any) {
+    async update(id: string, updates: unknown) {
       return fundSourceApi.update(id, updates);
     },
 

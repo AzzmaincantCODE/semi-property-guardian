@@ -12,7 +12,6 @@ import {
   Plus, 
   Eye, 
   Package, 
-  DollarSign, 
   Calendar,
   Building2,
   User,
@@ -56,6 +55,11 @@ export default function Custodians() {
         console.log('[Realtime] Inventory items changed, refreshing custodian data...');
         queryClient.invalidateQueries({ queryKey: ['custodian-summaries'] });
         queryClient.invalidateQueries({ queryKey: ['custodian-current-items'] });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'custodians' }, () => {
+        console.log('[Realtime] Custodians changed, refreshing...');
+        queryClient.invalidateQueries({ queryKey: ['custodians'] });
+        queryClient.invalidateQueries({ queryKey: ['custodian-summaries'] });
       })
       .subscribe();
 
@@ -206,7 +210,7 @@ export default function Custodians() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1">
-                          <DollarSign className="h-4 w-4" />
+                          <span className="inline-flex items-center justify-center h-4 w-4 rounded-sm bg-emerald-600 text-white text-[10px] font-bold">₱</span>
                           ₱{(summary?.currently_assigned_value || 0).toLocaleString()}
                         </div>
                       </TableCell>
@@ -303,7 +307,7 @@ export default function Custodians() {
                 <Card>
                   <CardContent className="p-4">
                     <div className="flex items-center gap-2">
-                      <DollarSign className="h-5 w-5 text-green-600" />
+                      <span className="inline-flex items-center justify-center h-5 w-5 rounded-sm bg-emerald-600 text-white text-[11px] font-bold">₱</span>
                       <div>
                         <p className="text-sm text-muted-foreground">Current Value</p>
                         <p className="text-2xl font-bold">₱{custodianSummary.currently_assigned_value.toLocaleString()}</p>
@@ -325,7 +329,7 @@ export default function Custodians() {
                 <Card>
                   <CardContent className="p-4">
                     <div className="flex items-center gap-2">
-                      <DollarSign className="h-5 w-5 text-purple-600" />
+                      <span className="inline-flex items-center justify-center h-5 w-5 rounded-sm bg-purple-600 text-white text-[11px] font-bold">₱</span>
                       <div>
                         <p className="text-sm text-muted-foreground">Total Value</p>
                         <p className="text-2xl font-bold">₱{custodianSummary.total_value_assigned.toLocaleString()}</p>

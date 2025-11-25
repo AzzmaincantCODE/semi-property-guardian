@@ -239,13 +239,18 @@ export const Inventory = () => {
             propertyNumber: createdItem.propertyNumber
           });
           
-          // Create property card without initial entry - property cards should start blank
-          // Entries will be added when items are issued via ICS slips or transfers
+          // Create property card with initial receipt entry based on inventory values (Annex A.1)
           const propertyCard = await annexService.createPropertyCardFromInventory({
             inventoryItemId: createdItem.id,
             entityName: item.entityName || "PROVINCIAL GOVERNMENT OF APAYAO",
-            fundCluster: fundCluster
-            // No initialEntry - property cards start blank
+            fundCluster: fundCluster,
+            initialEntry: {
+              date: createdItem.dateAcquired || new Date().toISOString().split('T')[0],
+              reference: 'Initial Receipt',
+              receiptQty: createdItem.quantity || 1,
+              unitCost: createdItem.unitCost || 0,
+              totalCost: createdItem.totalCost || ((createdItem.quantity || 1) * (createdItem.unitCost || 0))
+            }
           });
           
           console.log('[Inventory] ✅ Property card created successfully:', {

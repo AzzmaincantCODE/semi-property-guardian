@@ -6,6 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { lookupService, LookupItem } from "@/services/lookupService";
+import { custodianService } from "@/services/custodianService";
+import { DepartmentSelector } from "@/components/ui/department-selector";
 import { useToast } from "@/hooks/use-toast";
 
 export default function Lookups() {
@@ -59,12 +61,25 @@ export default function Lookups() {
   const useCrud = (table: TableName, items: LookupItem[], setItems: (x: LookupItem[]) => void) => {
     const [mode, setMode] = useState<'idle' | 'create' | 'edit'>("idle");
     const [editing, setEditing] = useState<LookupItem | null>(null);
-    const [form, setForm] = useState<{ name: string; code?: string }>({ name: "" });
+    const [form, setForm] = useState<{ name: string; code?: string; position?: string; department_id?: string; department_name?: string }>({ name: "" });
     const hasCode = table === 'fund_sources' || table === 'departments' || table === 'custodians' || table === 'semi_expandable_categories';
     const codeRequired = table === 'fund_sources';
-    const startCreate = () => { setMode('create'); setEditing(null); setForm(hasCode ? { name: "", code: "" } : { name: "" }); };
-    const startEdit = (item: LookupItem) => { setMode('edit'); setEditing(item); setForm(hasCode ? { name: item.name, code: item.code } : { name: item.name }); };
-    const cancel = () => { setMode('idle'); setEditing(null); setForm({ name: "", code: "" }); };
+    const startCreate = () => { setMode('create'); setEditing(null); setForm(hasCode ? (table === 'custodians' ? { name: "", code: "", position: "", department_id: undefined, department_name: "" } : { name: "", code: "" }) : { name: "" }); };
+    const startEdit = async (item: LookupItem) => { 
+      setMode('edit'); 
+      setEditing(item); 
+      if (table === 'custodians') {
+        try {
+          const full = await custodianService.getById(item.id);
+          if (full) {
+            setForm({ name: full.name, code: item.code, position: full.position || "", department_id: full.department_id || undefined, department_name: full.department_name || "" });
+            return;
+          }
+        } catch {}
+      }
+      setForm(hasCode ? { name: item.name, code: item.code } : { name: item.name }); 
+    };
+    const cancel = () => { setMode('idle'); setEditing(null); setForm(table === 'custodians' ? { name: "", code: "", position: "", department_id: undefined, department_name: "" } : { name: "", code: "" }); };
     const save = async () => {
       if (mode === 'edit' && editing) {
         const updated = await lookupService.update(table, editing.id, form);
@@ -146,6 +161,19 @@ export default function Lookups() {
                 value={form.code || ""}
                 onChange={e => setForm({ ...form, code: e.target.value })}
                 required={codeRequired}
+              />
+            )}
+            {table === 'custodians' && (
+              <Input 
+                placeholder="Position"
+                value={form.position || ""}
+                onChange={e => setForm({ ...form, position: e.target.value })}
+              />
+            )}
+            {table === 'custodians' && (
+              <DepartmentSelector 
+                value={form.department_name || ""}
+                onChange={(name, dep) => setForm({ ...form, department_name: name, department_id: dep?.id })}
               />
             )}
             {table === 'custodians' && mode === 'create' && (

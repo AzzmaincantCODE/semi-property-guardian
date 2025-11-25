@@ -233,20 +233,59 @@ export class AnnexService {
           continue;
         }
 
-        // Add entry to property card for this custodian assignment
+        // If the property card has no entries yet, add an initial receipt entry first (Annex A.1)
+        const { data: existingEntries } = await supabase
+          .from('property_card_entries')
+          .select('id')
+          .eq('property_card_id', propertyCard.id)
+          .limit(1);
+        if (!existingEntries || existingEntries.length === 0) {
+          await this.addPropertyCardEntry(propertyCard.id, {
+            date: inventoryItem.date_acquired,
+            reference: 'Initial Receipt',
+            receiptQty: inventoryItem.quantity,
+            unitCost: Number(inventoryItem.unit_cost || 0),
+            totalCost: Number(inventoryItem.total_cost || ((inventoryItem.quantity || 1) * (Number(inventoryItem.unit_cost || 0)))),
+            issueItemNo: '',
+            issueQty: 0,
+            officeOfficer: '',
+            balanceQty: inventoryItem.quantity,
+            amount: Number(inventoryItem.total_cost || 0),
+            remarks: '',
+            relatedSlipId: undefined,
+            relatedTransferId: undefined
+          });
+        }
+
+        // Add issue entry to property card for this custodian assignment
+        let lastBalance = 0;
+        const { data: lastEntry } = await supabase
+          .from('property_card_entries')
+          .select('balance_qty')
+          .eq('property_card_id', propertyCard.id)
+          .order('date', { ascending: false })
+          .limit(1)
+          .single();
+        if (lastEntry && typeof lastEntry.balance_qty === 'number') {
+          lastBalance = lastEntry.balance_qty;
+        }
+        const issueQty = inventoryItem.quantity || 1;
+        const newBalance = Math.max(0, (lastBalance || 0) - issueQty);
+
         const propertyCardEntry = await this.addPropertyCardEntry(propertyCard.id, {
           date: request.dateIssued,
-          reference: slip.slip_number || 'PENDING',
-          receiptQty: 0, // This is an issue, not a receipt
+          reference: `ICS ${slip.slip_number || 'PENDING'}`,
+          receiptQty: 0,
           unitCost: 0,
           totalCost: 0,
-          issueItemNo: slip.slip_number || 'PENDING',
-          issueQty: inventoryItem.quantity,
+          issueItemNo: inventoryItem.property_number || '',
+          issueQty: issueQty,
           officeOfficer: `${request.custodianName} (${request.designation})`,
-          balanceQty: 0, // Item is now with custodian
+          balanceQty: newBalance,
           amount: 0,
           remarks: `Issued via ICS ${slip.slip_number || 'PENDING'}`,
-          relatedSlipId: slip.id
+          relatedSlipId: slip.id,
+          relatedTransferId: undefined
         });
 
         // Update slip item with property card entry reference

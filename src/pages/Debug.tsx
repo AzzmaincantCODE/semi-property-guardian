@@ -14,6 +14,8 @@ export default function Debug() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authMsg, setAuthMsg] = useState<string | null>(null);
+  const [resetMsg, setResetMsg] = useState<string | null>(null);
+  const [resetBusy, setResetBusy] = useState(false);
 
   const runChecks = async () => {
       const r: PingResult[] = [];
@@ -50,8 +52,9 @@ export default function Debug() {
           // cleanup
           await supabase.from("property_cards").delete().eq("id", insertRes.data.id);
         }
-      } catch (e: any) {
-        r.push({ step: "unexpected", ok: false, error: e?.message || String(e) });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        r.push({ step: "unexpected", ok: false, error: msg });
       } finally {
         setResults(r);
         setLoading(false);
@@ -78,6 +81,147 @@ export default function Debug() {
     await runChecks();
   };
 
+  const batchDeleteAll = async (table: string) => {
+    const batchSize = 1000;
+    let offset = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from(table)
+        .select('id')
+        .range(offset, offset + batchSize - 1);
+      if (error) throw error;
+      const ids = (data || []).map((r: { id: string }) => r.id);
+      if (!ids.length) break;
+      const del = await supabase.from(table).delete().in('id', ids);
+      if (del.error) throw del.error;
+      if (ids.length < batchSize) break;
+      offset += batchSize;
+    }
+  };
+
+  const resetTransfers = async () => {
+    setResetMsg(null);
+    setResetBusy(true);
+    try {
+      await batchDeleteAll('transfer_items');
+      await batchDeleteAll('property_transfers');
+      setResetMsg("Transfers reset completed");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResetMsg(msg);
+    } finally {
+      setResetBusy(false);
+    }
+  };
+
+  const resetPropertyCards = async () => {
+    setResetMsg(null);
+    setResetBusy(true);
+    try {
+      await batchDeleteAll('property_card_entries');
+      await batchDeleteAll('property_cards');
+      setResetMsg("Property cards reset completed");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResetMsg(msg);
+    } finally {
+      setResetBusy(false);
+    }
+  };
+
+  const resetInventorySafe = async () => {
+    setResetMsg(null);
+    setResetBusy(true);
+    try {
+      const { data: referenced } = await supabase
+        .from("custodian_slip_items")
+        .select("inventory_item_id")
+        .not("inventory_item_id", "is", null);
+      const refRows = (referenced ?? []) as { inventory_item_id: string | null }[];
+      const referencedIds = Array.from(new Set(refRows.map((x) => x.inventory_item_id))).filter((id): id is string => !!id);
+
+      if (referencedIds.length > 0) {
+        const delUnref = await supabase
+          .from("inventory_items")
+          .delete()
+          .not("id", "in", referencedIds);
+        if (delUnref.error && delUnref.error.code !== "PGRST204") throw delUnref.error;
+      } else {
+        await batchDeleteAll('inventory_items');
+      }
+
+      if (referencedIds.length > 0) {
+        const updRef = await supabase
+          .from("inventory_items")
+          .update({
+            custodian: null,
+            custodian_position: null,
+            assignment_status: "Available",
+            assigned_date: null,
+            updated_at: new Date().toISOString(),
+          })
+          .in("id", referencedIds);
+        if (updRef.error && updRef.error.code !== "PGRST204") throw updRef.error;
+      }
+
+      setResetMsg("Inventory reset completed (safe mode)");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResetMsg(msg);
+    } finally {
+      setResetBusy(false);
+    }
+  };
+
+  const resetAll = async () => {
+    setResetMsg(null);
+    setResetBusy(true);
+    try {
+      await batchDeleteAll('property_card_entries');
+      await batchDeleteAll('property_cards');
+      await batchDeleteAll('transfer_items');
+      await batchDeleteAll('property_transfers');
+
+      const { data: referenced } = await supabase
+        .from("custodian_slip_items")
+        .select("inventory_item_id")
+        .not("inventory_item_id", "is", null);
+      const refRows = (referenced ?? []) as { inventory_item_id: string | null }[];
+      const referencedIds = Array.from(new Set(refRows.map((x) => x.inventory_item_id))).filter((id): id is string => !!id);
+
+      if (referencedIds.length > 0) {
+        const delUnref = await supabase
+          .from("inventory_items")
+          .delete()
+          .not("id", "in", referencedIds);
+        if (delUnref.error && delUnref.error.code !== "PGRST204") throw delUnref.error;
+      } else {
+        await batchDeleteAll('inventory_items');
+      }
+
+      if (referencedIds.length > 0) {
+        const updRef = await supabase
+          .from("inventory_items")
+          .update({
+            custodian: null,
+            custodian_position: null,
+            assignment_status: "Available",
+            assigned_date: null,
+            updated_at: new Date().toISOString(),
+          })
+          .in("id", referencedIds);
+        if (updRef.error && updRef.error.code !== "PGRST204") throw updRef.error;
+      }
+
+      setResetMsg("All resets completed");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResetMsg(msg);
+    } finally {
+      setResetBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Supabase Debug</h1>
@@ -91,6 +235,17 @@ export default function Debug() {
           <button className="border rounded px-3 py-1" onClick={handleSignOut}>Sign out</button>
         </div>
         {authMsg && <div className="text-xs text-muted-foreground">{authMsg}</div>}
+      </div>
+      <div className="rounded border p-4 space-y-3">
+        <div className="font-medium">Reset data</div>
+        <div className="text-xs text-muted-foreground">Destructive actions. Ensure correct environment.</div>
+        <div className="flex flex-wrap gap-2">
+          <button className="border rounded px-3 py-1 bg-red-600 text-white" disabled={resetBusy} onClick={resetTransfers}>Clean Transfers</button>
+          <button className="border rounded px-3 py-1 bg-red-600 text-white" disabled={resetBusy} onClick={resetPropertyCards}>Clean Property Cards</button>
+          <button className="border rounded px-3 py-1 bg-red-600 text-white" disabled={resetBusy} onClick={resetInventorySafe}>Clean Inventory (safe)</button>
+          <button className="border rounded px-3 py-1 bg-red-700 text-white" disabled={resetBusy} onClick={resetAll}>Clean All</button>
+        </div>
+        {resetMsg && <div className="text-xs text-muted-foreground">{resetMsg}</div>}
       </div>
       {loading ? (
         <div>Running checks…</div>

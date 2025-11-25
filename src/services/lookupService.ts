@@ -42,7 +42,8 @@ export const lookupService = {
         // Return empty array instead of throwing to prevent app crashes
         return [];
       }
-      return (data || []).map((r: any) => ({ id: r.id, name: r.name, code: r.custodian_no }));
+      type CustodianRow = { id: string; name: string; custodian_no?: string | null };
+      return (data || []).map((r: CustodianRow) => ({ id: r.id, name: r.name, code: r.custodian_no ?? undefined }));
     } catch (err) {
       console.error('Network error fetching custodians:', err);
       // Return empty array for network errors
@@ -80,7 +81,8 @@ export const lookupService = {
       return [];
     }
 
-    return data || [];
+    type UserRow = { id: string; full_name: string };
+    return (data || []).map((u: UserRow) => ({ id: u.id, name: u.full_name }));
   },
 
   // Get all departments
@@ -116,25 +118,21 @@ export const lookupService = {
   },
 
   // Create lookup
-  async create(table: 'suppliers' | 'fund_sources' | 'departments' | 'custodians' | 'semi_expandable_categories', values: { name: string; code?: string }) {
-    const payload: any = { name: values.name };
+  async create(table: 'suppliers' | 'fund_sources' | 'departments' | 'custodians' | 'semi_expandable_categories', values: { name: string; code?: string; position?: string; department_id?: string }) {
+    const payload: Record<string, unknown> = { name: values.name };
     const trimmedCode = values.code?.trim();
     
     // Handle different table requirements
     if (table === 'fund_sources') {
-      // Fund sources require a code
       if (!trimmedCode) {
         throw new Error('Code is required for fund sources');
       }
       payload.code = trimmedCode;
     } else if (table === 'departments' || table === 'semi_expandable_categories') {
-      // Departments and semi_expandable_categories can have optional code
       if (trimmedCode) payload.code = trimmedCode;
     } else if (table === 'custodians') {
-      // For custodians, use custodian_no instead of code
       let custodianNo = trimmedCode;
       if (!custodianNo) {
-        // Auto-generate custodian_no as next numeric sequence based on existing max
         const { data: rows, error: maxErr } = await supabase
           .from('custodians')
           .select('custodian_no')
@@ -151,10 +149,8 @@ export const lookupService = {
           custodianNo = '0001';
         }
       }
-      // Normalize to CUST-0001 format for consistency
       const numeric = (custodianNo.match(/\d+/) ? (custodianNo.match(/\d+/) as RegExpMatchArray)[0] : custodianNo).padStart(4, '0');
       const normalized = `CUST-${numeric}`;
-      // Pre-insert duplicate check for clearer UX
       const { data: existing, error: checkErr } = await supabase
         .from('custodians')
         .select('id')
@@ -164,14 +160,15 @@ export const lookupService = {
         throw new Error('Custodian number already exists. Please use a different number.');
       }
       payload.custodian_no = normalized;
+      if (values.position !== undefined) payload.position = (values.position && values.position.trim() !== '') ? values.position : null;
+      if (values.department_id !== undefined) payload.department_id = (values.department_id && values.department_id.trim() !== '') ? values.department_id : null;
     }
     
     const selectCols = (table === 'fund_sources' || table === 'departments' || table === 'semi_expandable_categories') ? 'id, name, code' : 
-                      table === 'custodians' ? 'id, name, custodian_no' : 'id, name';
+                      table === 'custodians' ? 'id, name, custodian_no, position, department_id' : 'id, name';
     
     const { data, error } = await supabase.from(table).insert(payload).select(selectCols).single();
     if (error) {
-      // Handle specific constraint violations
       if (error.code === '23505') {
         if (table === 'custodians') {
           throw new Error('Custodian number already exists. Please use a different number.');
@@ -180,31 +177,27 @@ export const lookupService = {
         }
       }
       if (error.code === '23502' && table === 'departments') {
-        // Not-null violation on departments.code — guide user to run migration
         throw new Error('Department code is optional, but your database still requires it. Please run database/make-department-code-optional.sql in Supabase.');
       }
       throw error;
     }
     
-    // Map custodian response to standard format
     if (table === 'custodians') {
       return { id: data.id, name: data.name, code: data.custodian_no };
     }
     
-    return data as any as LookupItem;
+    return data as LookupItem;
   },
 
   // Update lookup
-  async update(table: 'suppliers' | 'fund_sources' | 'departments' | 'custodians' | 'semi_expandable_categories', id: string, values: { name?: string; code?: string }) {
-    const payload: any = {};
+  async update(table: 'suppliers' | 'fund_sources' | 'departments' | 'custodians' | 'semi_expandable_categories', id: string, values: { name?: string; code?: string; position?: string; department_id?: string }) {
+    const payload: Record<string, unknown> = {};
     if (values.name !== undefined) payload.name = values.name;
     
-    // Handle different table requirements
     const trimmedCode = values.code?.trim();
     if (table === 'fund_sources' || table === 'departments' || table === 'semi_expandable_categories') {
       if (values.code !== undefined) payload.code = trimmedCode ?? null;
     } else if (table === 'custodians') {
-      // For custodians, use custodian_no instead of code
       if (values.code !== undefined) {
         if (trimmedCode) {
           const numeric = (trimmedCode.match(/\d+/) ? (trimmedCode.match(/\d+/) as RegExpMatchArray)[0] : trimmedCode).padStart(4, '0');
@@ -213,22 +206,23 @@ export const lookupService = {
           payload.custodian_no = null;
         }
       }
+      if (values.position !== undefined) payload.position = (values.position && values.position.trim() !== '') ? values.position : null;
+      if (values.department_id !== undefined) payload.department_id = (values.department_id && values.department_id.trim() !== '') ? values.department_id : null;
     }
     
     const selectCols = (table === 'fund_sources' || table === 'departments' || table === 'semi_expandable_categories') ? 'id, name, code' : 
-                      table === 'custodians' ? 'id, name, custodian_no' : 'id, name';
+                      table === 'custodians' ? 'id, name, custodian_no, position, department_id' : 'id, name';
     
     const { data, error } = await supabase.from(table).update(payload).eq('id', id).select(selectCols).single();
     if (error) throw error;
     
-    // Map custodian response to standard format
     if (table === 'custodians') {
       return { id: data.id, name: data.name, code: data.custodian_no };
     }
     
-    return data as any as LookupItem;
+    return data as LookupItem;
   },
-
+  
   // Delete lookup
   async remove(table: 'suppliers' | 'fund_sources' | 'departments' | 'custodians' | 'semi_expandable_categories', id: string) {
     // For departments, check if it's referenced by custodians

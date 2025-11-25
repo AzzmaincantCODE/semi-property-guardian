@@ -136,61 +136,70 @@ export const CustodianSlips = () => {
       });
       return;
     }
-    // Save to Supabase (custodian_slips and items)
-    const { data: created, error } = await supabase
-      .from('custodian_slips')
-      .insert({
-        slip_number: '', // Empty - trigger will auto-generate ICS number
-        custodian_name: formData.custodianName,
-        designation: formData.designation,
-        office: formData.office,
-        date_issued: formData.dateIssued,
-        issued_by: formData.issuedBy,
-        received_by: formData.receivedBy,
-      })
-      .select('*')
-      .single();
-    if (error) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+
+    // Resolve inventory item IDs from entered property numbers
+    const enteredProps = (formData.items || [])
+      .map(it => (it.propertyNumber || '').trim())
+      .filter(Boolean);
+
+    const inventoryItemIds: string[] = [];
+    for (const pn of enteredProps) {
+      const local = inventoryItems.find(i => i.propertyNumber === pn);
+      if (local?.id) {
+        inventoryItemIds.push(local.id);
+        continue;
+      }
+      const { data: inv } = await supabase
+        .from('inventory_items')
+        .select('id')
+        .eq('property_number', pn)
+        .single();
+      if (inv?.id) inventoryItemIds.push(inv.id);
+    }
+
+    if (inventoryItemIds.length === 0) {
+      toast({ title: 'No items', description: 'Add at least one valid property number', variant: 'destructive' });
       return;
     }
-    const items = (formData.items || []).map(it => ({
-      slip_id: created.id,
-      property_number: it.propertyNumber,
-      description: it.description,
-      quantity: it.quantity,
-      unit: it.unit,
-      date_issued: formData.dateIssued,
-    }));
-    if (items.length) {
-      const { error: itemsErr } = await supabase.from('custodian_slip_items').insert(items);
-      if (itemsErr) {
-        toast({ title: 'Items error', description: itemsErr.message, variant: 'destructive' });
-      }
+
+    try {
+      const req: CreateCustodianSlipRequest = {
+        custodianName: formData.custodianName,
+        designation: formData.designation || '',
+        office: formData.office || '',
+        dateIssued: formData.dateIssued!,
+        issuedBy: formData.issuedBy!,
+        receivedBy: formData.receivedBy!,
+        inventoryItemIds
+      };
+      await annexService.createCustodianSlip(req);
+
+      queryClient.invalidateQueries({ queryKey: ['custodian-slips'] });
+      queryClient.invalidateQueries({ queryKey: ['inventory-for-slips'] });
+
+      setFormData({
+        custodianName: "",
+        designation: "",
+        office: "",
+        items: [{
+          propertyNumber: "",
+          description: "",
+          quantity: 1,
+          unit: "",
+          dateIssued: ""
+        }],
+        dateIssued: "",
+        issuedBy: "",
+        receivedBy: ""
+      });
+      setSelectedCustodian(null);
+      setSelectedDepartment(null);
+      setIsCreating(false);
+      toast({ title: 'Success', description: 'Custodian slip created successfully' });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to create custodian slip';
+      toast({ title: 'Error', description: msg, variant: 'destructive' });
     }
-    queryClient.invalidateQueries({ queryKey: ['custodian-slips'] });
-    setFormData({
-      custodianName: "",
-      designation: "",
-      office: "",
-      items: [{
-        propertyNumber: "",
-        description: "",
-        quantity: 1,
-        unit: "",
-        dateIssued: ""
-      }],
-      dateIssued: "",
-      issuedBy: "",
-      receivedBy: ""
-    });
-    setSelectedCustodian(null);
-    setSelectedDepartment(null);
-    setIsCreating(false);
-    toast({
-      title: "Success",
-      description: "Custodian slip created successfully"
-    });
   };
 
   useEffect(() => {

@@ -121,7 +121,7 @@ export const simpleInventoryService = {
     const totalPages = Math.ceil(total / limit);
 
     // Check which items have property cards (batch query for performance)
-    let itemsWithPropertyCards = new Set<string>();
+    const itemsWithPropertyCards = new Set<string>();
     if (filteredData.length > 0) {
       const itemIds = filteredData.map(item => item.id);
       // Split into chunks of 100 to avoid query limits
@@ -378,9 +378,39 @@ export const simpleInventoryService = {
     if (!navigator.onLine) {
       await enqueueOfflineMutation('inventory.update', { id, updates });
       // Optimistic success; caller should update cache/UI
-      return { data: { ...(updates as any), id } as any, error: null, success: true };
+      const optimistic: InventoryItem = {
+        id,
+        propertyNumber: updates.propertyNumber ?? '',
+        description: updates.description ?? '',
+        brand: updates.brand ?? '',
+        model: updates.model ?? '',
+        serialNumber: updates.serialNumber ?? '',
+        unitOfMeasure: updates.unitOfMeasure ?? '',
+        quantity: updates.quantity ?? 0,
+        unitCost: updates.unitCost ?? 0,
+        totalCost: updates.totalCost ?? 0,
+        dateAcquired: updates.dateAcquired ?? new Date().toISOString(),
+        supplier: updates.supplier ?? '',
+        condition: updates.condition ?? '',
+        fundSource: updates.fundSource ?? '',
+        remarks: updates.remarks ?? '',
+        lastInventoryDate: updates.lastInventoryDate ?? '',
+        semiExpandableCategory: updates.semiExpandableCategory,
+        subCategory: updates.subCategory,
+        entityName: updates.entityName,
+        status: updates.status ?? 'Active',
+        estimatedUsefulLife: 0,
+        estimatedUsefulLifeOverride: updates.estimatedUsefulLifeOverride ?? null,
+        custodian: '',
+        custodianPosition: '',
+        assignmentStatus: 'Available',
+        assignedDate: '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      return { data: optimistic, error: null, success: true };
     }
-    const updateData: any = {};
+    const updateData: Record<string, unknown> = {};
     
     if (updates.propertyNumber) updateData.property_number = updates.propertyNumber;
     if (updates.description) updateData.description = updates.description;

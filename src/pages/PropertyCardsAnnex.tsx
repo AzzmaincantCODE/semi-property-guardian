@@ -348,20 +348,18 @@ export const PropertyCardsAnnex = () => {
   const getCardWithEntries = async (cardId: string): Promise<AnnexPropertyCard | null> => {
     const card = await annexService.getPropertyCardWithEntries(cardId);
     if (!card) return null;
-    
-    // Also fetch the related inventory item for more details
+
+    let enrichedCard: AnnexPropertyCard & any = { ...card };
+
     try {
       const { data: inventoryItem } = await supabase
         .from('inventory_items')
         .select('*')
         .eq('id', card.inventoryItemId)
         .single();
-      
-      // Attach inventory details to card object
       if (inventoryItem) {
-        return {
-          ...card,
-          // Add inventory fields as additional data
+        enrichedCard = {
+          ...enrichedCard,
           brand: inventoryItem.brand,
           model: inventoryItem.model,
           serialNumber: inventoryItem.serial_number,
@@ -380,8 +378,69 @@ export const PropertyCardsAnnex = () => {
     } catch (error) {
       console.error('Error fetching inventory details:', error);
     }
-    
-    return card;
+
+    if (!enrichedCard.entries || enrichedCard.entries.length === 0) {
+      try {
+        const { data: slipItems } = await supabase
+          .from('custodian_slip_items')
+          .select('*, custodian_slips(slip_number, date_issued)')
+          .eq('inventory_item_id', enrichedCard.inventoryItemId);
+
+        const icsEntries = (slipItems || []).map((it: any) => ({
+          id: it.id,
+          propertyCardId: enrichedCard.id,
+          date: it.date_issued,
+          reference: `ICS ${it.custodian_slips?.slip_number || ''}`.trim(),
+          receiptQty: it.quantity || 0,
+          unitCost: Number(it.unit_cost || 0),
+          totalCost: Number(it.total_cost || 0),
+          issueItemNo: '',
+          issueQty: 0,
+          officeOfficer: '',
+          balanceQty: it.quantity || 0,
+          amount: Number(it.total_cost || 0),
+          remarks: `Issued via ICS ${it.custodian_slips?.slip_number || ''}`.trim(),
+          relatedSlipId: it.slip_id,
+          relatedTransferId: null,
+          createdAt: it.created_at,
+          updatedAt: it.updated_at
+        }));
+
+        const { data: transferItems } = await supabase
+          .from('transfer_items')
+          .select('*, property_transfers(itr_number, to_department, to_custodian)')
+          .eq('property_number', enrichedCard.propertyNumber);
+
+        const itrEntries = (transferItems || []).map((ti: any) => ({
+          id: ti.id,
+          propertyCardId: enrichedCard.id,
+          date: enrichedCard.updatedAt || ti.created_at,
+          reference: `ITR ${ti.property_transfers?.itr_number || ''}`.trim(),
+          receiptQty: 0,
+          unitCost: 0,
+          totalCost: 0,
+          issueItemNo: ti.property_number || '',
+          issueQty: ti.quantity || 1,
+          officeOfficer: ti.property_transfers?.to_custodian || ti.property_transfers?.to_department || '',
+          balanceQty: 0,
+          amount: 0,
+          remarks: 'Transferred',
+          relatedSlipId: null,
+          relatedTransferId: ti.transfer_id,
+          createdAt: ti.created_at,
+          updatedAt: ti.updated_at
+        }));
+
+        enrichedCard = {
+          ...enrichedCard,
+          entries: [...icsEntries, ...itrEntries].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+        } as any;
+      } catch (e) {
+        console.error('Fallback building property card entries failed:', e);
+      }
+    }
+
+    return enrichedCard;
   };
 
   const handleCreateCard = async () => {
@@ -411,13 +470,18 @@ export const PropertyCardsAnnex = () => {
     }
 
     console.log('Creating property card for item:', selectedItem.propertyNumber);
-    // Create property card without initial entry - property cards should start blank
-    // Entries will be added when items are issued via ICS slips or transfers
+    // Create property card with initial receipt entry (Annex A.1)
     createCardMutation.mutate({
       inventoryItemId: newCardForm.inventoryItemId,
       entityName: newCardForm.entityName,
-      fundCluster: newCardForm.fundCluster
-      // No initialEntry - property cards start blank
+      fundCluster: newCardForm.fundCluster,
+      initialEntry: {
+        date: selectedItem.dateAcquired || newCardForm.dateIssued || new Date().toISOString().split('T')[0],
+        reference: 'Initial Receipt',
+        receiptQty: selectedItem.quantity || 1,
+        unitCost: selectedItem.unitCost || 0,
+        totalCost: selectedItem.totalCost || ((selectedItem.quantity || 1) * (selectedItem.unitCost || 0))
+      }
     });
   };
 
