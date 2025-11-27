@@ -108,20 +108,39 @@ export const PropertyCardsAnnex = () => {
     queryFn: async () => {
       console.log('[PropertyCardsAnnex] Fetching property cards...');
       
-      // Use left join to include all property cards and fetch inventory item data for value categorization
-      const { data, error } = await supabase
+      // Fetch all property cards first
+      const { data: cardsData, error: cardsError } = await supabase
         .from('property_cards')
-        .select(`
-          *,
-          inventory_items(
-            id,
-            assignment_status,
-            custodian,
-            property_number,
-            sub_category,
-            unit_cost
-          )
-        `);
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (cardsError) {
+        console.error('[PropertyCardsAnnex] Error fetching property cards:', cardsError);
+        throw cardsError;
+      }
+
+      // Then fetch inventory items for cards that have inventory_item_id
+      const inventoryItemIds = (cardsData || [])
+        .map(card => card.inventory_item_id)
+        .filter(Boolean) as string[];
+
+      let inventoryItemsMap: Record<string, any> = {};
+      
+      if (inventoryItemIds.length > 0) {
+        const { data: inventoryData, error: inventoryError } = await supabase
+          .from('inventory_items')
+          .select('id, assignment_status, custodian, property_number, sub_category, unit_cost')
+          .in('id', inventoryItemIds);
+
+        if (!inventoryError && inventoryData) {
+          inventoryItemsMap = inventoryData.reduce((acc, item) => {
+            acc[item.id] = item;
+            return acc;
+          }, {} as Record<string, any>);
+        }
+      }
+
+      const data = cardsData || [];
 
       if (error) {
         console.error('[PropertyCardsAnnex] Error fetching property cards:', error);
@@ -143,10 +162,10 @@ export const PropertyCardsAnnex = () => {
       });
       
       const mappedCards = sortedData.map(card => {
-        // Handle both single object and array from Supabase join
-        const inventoryItem = Array.isArray(card.inventory_items) 
-          ? card.inventory_items[0] 
-          : card.inventory_items;
+        // Get inventory item from the map we created
+        const inventoryItem = card.inventory_item_id 
+          ? inventoryItemsMap[card.inventory_item_id] 
+          : null;
         
         // Determine value category based on sub_category or unit_cost
         const subCategory = inventoryItem?.sub_category;
@@ -191,24 +210,28 @@ export const PropertyCardsAnnex = () => {
 
   // Fetch available inventory items for creating property cards
   const { data: inventoryItems = [] } = useQuery({
-    queryKey: ['available-inventory-for-cards'],
+    queryKey: ['available-inventory-for-cards', cards.length], // Include cards.length to refetch when cards change
     queryFn: async () => {
+      console.log('[PropertyCardsAnnex] Fetching available inventory items for property card creation...');
+      console.log('[PropertyCardsAnnex] Current property cards count:', cards.length);
+      
       // Get all inventory items (including those without property cards) for property card creation
+      // Note: We don't filter by category since all items in this system are semi-expendable (below 50k PHP)
       const { data, error } = await supabase
         .from('inventory_items')
         .select('*')
-        .eq('category', 'Semi-Expendable')
         .eq('status', 'Active')
         .eq('condition', 'Serviceable')
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('Error fetching available inventory:', error);
+        console.error('[PropertyCardsAnnex] Error fetching available inventory:', error);
         // Fallback to manual filtering if view doesn't exist yet
         const response = await simpleInventoryService.getAll();
         if (response.success) {
           const existingCardItems = cards.map(card => card.inventoryItemId).filter(Boolean);
-          return response.data.filter(item => 
+          console.log('[PropertyCardsAnnex] Existing card items (fallback):', existingCardItems);
+          const filtered = response.data.filter(item => 
             // Must be serviceable
             item.condition === 'Serviceable' &&
             // Must not already have a property card
@@ -218,44 +241,75 @@ export const PropertyCardsAnnex = () => {
             // Additional safety check for assignment status if it exists
             (!(item as any).assignmentStatus || (item as any).assignmentStatus === 'Available')
           );
+          console.log('[PropertyCardsAnnex] Filtered inventory items (fallback):', filtered.length);
+          return filtered;
         }
         return [];
       }
 
+      console.log('[PropertyCardsAnnex] Raw inventory items fetched:', data?.length || 0);
+
       // Filter out items that already have property cards
       const existingCardItems = cards.map(card => card.inventoryItemId).filter(Boolean);
-      return data
-        .filter(item => !existingCardItems.includes(item.id))
-        .map(item => ({
-          id: item.id,
-          propertyNumber: item.property_number,
-          description: item.description,
-          brand: item.brand,
-          model: item.model,
-          serialNumber: item.serial_number,
-          entityName: item.entity_name,
-          unitOfMeasure: item.unit_of_measure,
-          quantity: item.quantity,
-          unitCost: item.unit_cost,
-          totalCost: item.total_cost,
-          dateAcquired: item.date_acquired,
-          supplier: item.supplier_id,
-          condition: item.condition,
-          location: item.location,
-          fundSource: item.fund_source_id,
-          remarks: item.remarks,
-          lastInventoryDate: item.last_inventory_date,
-          category: item.category,
-          subCategory: item.sub_category,
-          status: item.status,
-          assignmentStatus: item.assignment_status as 'Available' | 'Assigned',
-          assignedDate: item.assigned_date,
-          createdAt: item.created_at,
-          updatedAt: item.updated_at
-        }));
+      console.log('[PropertyCardsAnnex] Existing card items:', existingCardItems);
+      
+      const filtered = data
+        .filter(item => {
+          const hasCard = existingCardItems.includes(item.id);
+          if (hasCard) {
+            console.log(`[PropertyCardsAnnex] Filtering out item ${item.property_number} - already has property card`);
+          }
+          return !hasCard;
+        })
+        .map(item => {
+          const mapped: AnnexInventoryItem & { entityName?: string } = {
+            id: item.id,
+            propertyNumber: item.property_number,
+            description: item.description || '',
+            brand: item.brand || '',
+            model: item.model || '',
+            serialNumber: item.serial_number || '',
+            entityName: item.entity_name || '', // Add as extra field for form usage
+            unitOfMeasure: item.unit_of_measure || 'piece',
+            quantity: item.quantity || 1,
+            unitCost: item.unit_cost || 0,
+            totalCost: item.total_cost || 0,
+            dateAcquired: item.date_acquired || new Date().toISOString().split('T')[0],
+            supplier: item.supplier_id || '',
+            condition: (item.condition || 'Serviceable') as 'Serviceable' | 'Unserviceable' | 'For Repair' | 'Lost' | 'Stolen' | 'Damaged' | 'Destroyed',
+            location: item.location || '',
+            custodian: item.custodian || '',
+            custodianPosition: item.custodian_position || '',
+            accountableOfficer: item.custodian || '', // Use custodian as accountable officer
+            fundSource: item.fund_source_id || '',
+            remarks: item.remarks || '',
+            lastInventoryDate: item.last_inventory_date || undefined,
+            category: (item.category || 'Semi-Expendable') as 'Semi-Expendable' | 'Equipment' | 'Furniture',
+            status: (item.status || 'Active') as 'Active' | 'Transferred' | 'Disposed' | 'Missing',
+            assignmentStatus: (item.assignment_status || 'Available') as 'Available' | 'Assigned' | 'In-Transit' | 'Disposed',
+            assignedDate: item.assigned_date || undefined,
+            createdAt: item.created_at || new Date().toISOString(),
+            updatedAt: item.updated_at || new Date().toISOString()
+          };
+          return mapped;
+        });
+      
+      console.log('[PropertyCardsAnnex] Available inventory items after filtering:', filtered.length);
+      if (filtered.length > 0) {
+        console.log('[PropertyCardsAnnex] Sample items:', filtered.slice(0, 3).map(i => ({ 
+          propertyNumber: i.propertyNumber, 
+          description: i.description,
+          condition: i.condition,
+          status: i.status,
+          assignmentStatus: i.assignmentStatus
+        })));
+      }
+      
+      return filtered;
     },
-    enabled: isCreating,
-    staleTime: 2 * 60 * 1000,
+    enabled: isCreating && !loading, // Wait for cards to load first
+    staleTime: 0, // Always fetch fresh data
+    refetchOnMount: true,
   });
 
   // Handle prefill data from navigation state
@@ -297,6 +351,7 @@ export const PropertyCardsAnnex = () => {
         description: "Property card created successfully" 
       });
       queryClient.invalidateQueries({ queryKey: ['annex-property-cards'] });
+      queryClient.invalidateQueries({ queryKey: ['available-inventory-for-cards'] });
       setIsCreating(false);
       setNewCardForm({ entityName: "", fundCluster: "", inventoryItemId: "" });
     },
@@ -476,7 +531,7 @@ export const PropertyCardsAnnex = () => {
       entityName: newCardForm.entityName,
       fundCluster: newCardForm.fundCluster,
       initialEntry: {
-        date: selectedItem.dateAcquired || newCardForm.dateIssued || new Date().toISOString().split('T')[0],
+        date: selectedItem.dateAcquired || new Date().toISOString().split('T')[0],
         reference: 'Initial Receipt',
         receiptQty: selectedItem.quantity || 1,
         unitCost: selectedItem.unitCost || 0,
@@ -813,10 +868,10 @@ export const PropertyCardsAnnex = () => {
                   setNewCardForm(prev => ({ 
                     ...prev, 
                     inventoryItemId: value,
-                    // Use entity name from inventory item if available
-                    entityName: item?.entityName || prev.entityName,
+                    // Use entity name from inventory item if available (entityName is in the mapped data)
+                    entityName: (item as AnnexInventoryItem & { entityName?: string })?.entityName || prev.entityName,
                   }));
-                  setLockEntityName(!!item?.entityName);
+                  setLockEntityName(!!(item as AnnexInventoryItem & { entityName?: string })?.entityName);
                   
                   // Fetch fund source name if fund source ID exists
                   if (item?.fundSource) {
@@ -1069,7 +1124,7 @@ export const PropertyCardsAnnex = () => {
             description: "Property cards created successfully!"
           });
         }}
-        inventoryItems={inventoryItems}
+        inventoryItems={inventoryItems as any}
       />
     </div>
   );

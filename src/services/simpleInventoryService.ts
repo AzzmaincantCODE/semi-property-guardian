@@ -283,36 +283,53 @@ export const simpleInventoryService = {
       }
     }
     
-    const insertData = {
+    // Generate entity_name from brand/model/serial if not provided
+    let entityName = item.entityName;
+    if (!entityName || entityName.trim() === '') {
+      const parts: string[] = [];
+      if (item.brand) parts.push(item.brand);
+      if (item.model) parts.push(item.model);
+      if (item.serialNumber) parts.push(item.serialNumber);
+      entityName = parts.join(' ').trim() || item.description || '';
+    }
+    
+    const insertData: any = {
         property_number: item.propertyNumber,
         description: item.description,
-        brand: item.brand,
-        model: item.model,
-        serial_number: item.serialNumber,
-        unit_of_measure: item.unitOfMeasure,
-        quantity: item.quantity,
-        unit_cost: item.unitCost,
-        total_cost: item.totalCost,
+        brand: item.brand || null,
+        model: item.model || null,
+        serial_number: item.serialNumber || null,
+        unit_of_measure: item.unitOfMeasure || 'piece',
+        quantity: item.quantity || 1,
+        unit_cost: item.unitCost || 0,
+        total_cost: item.totalCost || 0,
         date_acquired: item.dateAcquired,
         supplier_id: item.supplier || null,
-        condition: item.condition,
+        condition: item.condition || 'Serviceable',
         fund_source_id: item.fundSource || null,
-        remarks: item.remarks,
-        last_inventory_date: item.lastInventoryDate,
-        category: 'Semi-Expendable', // Always Semi-Expendable
-        status: item.status,
-      estimated_useful_life_override: item.estimatedUsefulLifeOverride,
+        remarks: item.remarks || null,
+        last_inventory_date: item.lastInventoryDate || null,
+        category: 'Semi-Expandable', // Always Semi-Expendable
+        status: item.status || 'Active',
+        entity_name: entityName, // Required NOT NULL column - always include (auto-generated if not provided)
+        estimated_useful_life_override: item.estimatedUsefulLifeOverride || null,
     };
     
-    // Only add new columns if they exist (for backward compatibility)
+    // Add optional columns if they exist
     if (item.subCategory) {
       insertData.sub_category = item.subCategory;
     }
-    if (item.entityName) {
-      insertData.entity_name = item.entityName;
-    }
     if (item.semiExpandableCategory) {
       insertData.semi_expandable_category = item.semiExpandableCategory;
+    }
+    
+    // Add assignment status fields (with defaults)
+    insertData.assignment_status = item.assignmentStatus || 'Available';
+    if (item.custodian) {
+      insertData.custodian = item.custodian;
+    }
+    if (item.custodianPosition) {
+      insertData.custodian_position = item.custodianPosition;
     }
     
     console.log('Inserting data:', insertData);

@@ -358,7 +358,7 @@ export const Inventory = () => {
           )
         });
       } else {
-         toast({ 
+          toast({
           title: "Inventory Item Created Successfully", 
           description: `Item ${itemData.propertyNumber} has been added. To assign this item to a custodian, you'll need to create a property card first.`,
           action: (
@@ -753,7 +753,7 @@ export const Inventory = () => {
                             </Badge>
                           )}
                         </div>
-                      </TableCell>
+                    </TableCell>
                     <TableCell>₱{item.totalCost.toLocaleString()}</TableCell>
                     <TableCell>
                       <div className="flex items-center space-x-2">
@@ -764,8 +764,8 @@ export const Inventory = () => {
                             title="View Details"
                             disabled={createItemMutation.isPending || updateItemMutation.isPending || deleteItemMutation.isPending}
                           >
-                            <Eye className="h-4 w-4" />
-                          </Button>
+                          <Eye className="h-4 w-4" />
+                        </Button>
                         <Button 
                           variant="ghost" 
                           size="sm" 
@@ -786,7 +786,7 @@ export const Inventory = () => {
                           {deleteItemMutation.isPending && itemToDelete?.id === item.id ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
                           ) : (
-                            <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-4 w-4" />
                           )}
                         </Button>
                       </div>

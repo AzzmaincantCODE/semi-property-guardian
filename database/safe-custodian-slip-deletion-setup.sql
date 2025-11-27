@@ -2,13 +2,18 @@
 -- This script handles existing policies and functions gracefully
 -- Run this in Supabase SQL Editor
 
+-- Step 0: Drop dependent view and legacy functions so we can recreate them safely
+DROP VIEW IF EXISTS public.deletable_custodian_slips;
+DROP FUNCTION IF EXISTS public.safe_delete_custodian_slip(uuid);
+DROP FUNCTION IF EXISTS public.can_delete_custodian_slip(uuid);
+
 -- Step 1: Add status tracking to custodian slips (if not exists)
 ALTER TABLE custodian_slips 
 ADD COLUMN IF NOT EXISTS slip_status TEXT DEFAULT 'Draft' 
 CHECK (slip_status IN ('Draft', 'Issued', 'Completed', 'Cancelled'));
 
 -- Step 2: Create or replace function to check if slip can be deleted
-CREATE OR REPLACE FUNCTION public.can_delete_custodian_slip(slip_id uuid)
+CREATE OR REPLACE FUNCTION public.can_delete_custodian_slip(target_slip_id uuid)
 RETURNS boolean AS $$
 DECLARE
   slip_record record;
@@ -17,15 +22,15 @@ BEGIN
   -- Get the custodian slip details
   SELECT * INTO slip_record 
   FROM public.custodian_slips 
-  WHERE id = slip_id;
+  WHERE id = target_slip_id;
   
   -- Slip doesn't exist
   IF NOT FOUND THEN
     RETURN false;
   END IF;
   
-  -- Can only delete draft slips
-  IF slip_record.slip_status != 'Draft' THEN
+  -- Allow deleting Draft or Issued slips (temporary override)
+  IF slip_record.slip_status NOT IN ('Draft', 'Issued') THEN
     RETURN false;
   END IF;
   
@@ -33,7 +38,7 @@ BEGIN
   SELECT COUNT(*) INTO entry_count
   FROM public.property_card_entries pce
   JOIN public.custodian_slip_items csi ON pce.related_slip_id = csi.slip_id
-  WHERE csi.slip_id = slip_id;
+  WHERE csi.slip_id = target_slip_id;
   
   -- Cannot delete if property card entries exist
   IF entry_count > 0 THEN
@@ -46,14 +51,14 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Step 3: Create or replace function to safely delete custodian slip
-CREATE OR REPLACE FUNCTION public.safe_delete_custodian_slip(slip_id uuid)
+CREATE OR REPLACE FUNCTION public.safe_delete_custodian_slip(target_slip_id uuid)
 RETURNS boolean AS $$
 DECLARE
   can_delete boolean;
   item_record record;
 BEGIN
   -- Check if slip can be deleted
-  SELECT public.can_delete_custodian_slip(slip_id) INTO can_delete;
+  SELECT public.can_delete_custodian_slip(target_slip_id) INTO can_delete;
   
   IF NOT can_delete THEN
     RAISE EXCEPTION 'Cannot delete custodian slip % - it has been issued or has associated property card entries', slip_id;
@@ -63,7 +68,7 @@ BEGIN
   FOR item_record IN 
     SELECT inventory_item_id 
     FROM public.custodian_slip_items 
-    WHERE slip_id = slip_id
+    WHERE custodian_slip_items.slip_id = target_slip_id
   LOOP
     -- Reset inventory items to available status
     UPDATE public.inventory_items
@@ -78,11 +83,11 @@ BEGIN
   
   -- Delete custodian slip items
   DELETE FROM public.custodian_slip_items 
-  WHERE slip_id = slip_id;
+  WHERE custodian_slip_items.slip_id = target_slip_id;
   
   -- Delete the custodian slip
   DELETE FROM public.custodian_slips 
-  WHERE id = slip_id;
+  WHERE id = target_slip_id;
   
   RETURN true;
 END;
@@ -118,15 +123,7 @@ CREATE POLICY "Allow deletion of draft custodian slips" ON public.custodian_slip
 FOR DELETE
 USING (slip_status = 'Draft');
 
--- Step 9: Update existing slips to have proper status
--- Only mark as 'Issued' if they have date_issued, otherwise keep as 'Draft'
-UPDATE public.custodian_slips 
-SET slip_status = 'Issued'
-WHERE slip_status = 'Draft' 
-  AND date_issued IS NOT NULL
-  AND date_issued != '';
-
--- Ensure all slips without status are marked as Draft
+-- Step 9: Ensure all slips have a status (default to Draft when missing)
 UPDATE public.custodian_slips 
 SET slip_status = 'Draft'
 WHERE slip_status IS NULL;

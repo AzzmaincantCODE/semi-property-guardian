@@ -294,6 +294,11 @@ export const CustodianSlipsAnnex = () => {
         description: error.message, 
         variant: "destructive" 
       });
+
+      // Refresh data sources so stale selections don't linger
+      queryClient.invalidateQueries({ queryKey: ['annex-custodian-slips'] });
+      queryClient.invalidateQueries({ queryKey: ['available-inventory-for-slips'] });
+      queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
     },
   });
 
@@ -305,7 +310,7 @@ export const CustodianSlipsAnnex = () => {
       // Check if slip exists and get its status
       const { data: slipData, error: slipError } = await supabase
         .from('custodian_slips')
-        .select('slip_status')
+        .select('slip_status, slip_number')
         .eq('id', slipId)
         .single();
 
@@ -317,9 +322,14 @@ export const CustodianSlipsAnnex = () => {
         throw new Error('Custodian slip not found');
       }
 
-      // Can only delete draft slips
       if (slipData.slip_status !== 'Draft') {
-        throw new Error('This custodian slip cannot be deleted because it has been officially issued. Only draft slips can be deleted.');
+        const confirmed = window.confirm(
+          `ICS ${slipData.slip_number || ''} is already ${slipData.slip_status}. Deleting it will release all items and remove related entries. Continue?`
+        );
+
+        if (!confirmed) {
+          return { cancelled: true };
+        }
       }
 
       // Manual deletion process
@@ -346,6 +356,8 @@ export const CustodianSlipsAnnex = () => {
             custodian_position: null,
             assignment_status: 'Available',
             assigned_date: null,
+            ics_number: null,
+            ics_date: null,
             updated_at: new Date().toISOString()
           })
           .in('id', inventoryItemIds);
@@ -392,9 +404,18 @@ export const CustodianSlipsAnnex = () => {
       }
 
       console.log('Successfully deleted custodian slip');
-      return true;
+      return { cancelled: false };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result?.cancelled) {
+        toast({
+          title: "Cancelled",
+          description: "Deletion aborted",
+          variant: "default"
+        });
+        return;
+      }
+
       toast({ title: "Success", description: "Custodian slip deleted successfully" });
       queryClient.invalidateQueries({ queryKey: ['annex-custodian-slips'] });
       queryClient.invalidateQueries({ queryKey: ['available-inventory-for-slips'] });
@@ -751,15 +772,17 @@ export const CustodianSlipsAnnex = () => {
                     </Button>
                   )}
                   
-                  {/* Show Delete button for Draft slips only */}
-                  {(slip.slipStatus === 'Draft' || !slip.slipStatus) && (
+                  {/* Temporarily allow deleting Draft or Issued slips */}
+                  {(!slip.slipStatus || ['Draft', 'Issued'].includes(slip.slipStatus)) && (
                     <Button 
                       variant="outline" 
                       size="sm" 
                       onClick={() => handleDeleteSlip(slip.id)}
                       className="flex items-center gap-1 text-red-600 hover:text-red-700"
                       disabled={deleteSlipMutation.isPending}
-                      title="Delete this draft custodian slip"
+                      title={slip.slipStatus === 'Issued' 
+                        ? 'Delete this issued custodian slip (temporary override)'
+                        : 'Delete this draft custodian slip'}
                     >
                       <Trash2 className="h-3 w-3" />
                       Delete

@@ -1,21 +1,29 @@
 -- Quick setup for ICS number generation
 -- Run this FIRST before trying to create custodian slips
 
--- Create function to generate proper ICS numbers (ICS-YYYY-MM-NNNN)
-CREATE OR REPLACE FUNCTION public.generate_ics_number()
+-- Drop legacy versions first so we can recreate cleanly
+DROP FUNCTION IF EXISTS public.generate_ics_number();
+DROP FUNCTION IF EXISTS public.generate_ics_number(TEXT);
+
+-- Create function to generate proper ICS numbers (PREFIX-YYYY-MM-NNNN)
+CREATE OR REPLACE FUNCTION public.generate_ics_number(sub_category_prefix TEXT DEFAULT NULL)
 RETURNS TEXT AS $$
 DECLARE
   current_year TEXT;
   current_month TEXT;
+  base_prefix TEXT;
   year_month_prefix TEXT;
   next_sequence INTEGER;
   formatted_sequence TEXT;
   generated_number TEXT;
 BEGIN
+  -- Determine prefix (default to ICS when not provided)
+  base_prefix := COALESCE(NULLIF(sub_category_prefix, ''), 'ICS');
+
   -- Get current year and month
   current_year := EXTRACT(YEAR FROM NOW())::TEXT;
   current_month := LPAD(EXTRACT(MONTH FROM NOW())::TEXT, 2, '0');
-  year_month_prefix := 'ICS-' || current_year || '-' || current_month || '-';
+  year_month_prefix := base_prefix || '-' || current_year || '-' || current_month || '-';
   
   -- Find the highest sequence number for this year-month combination
   SELECT COALESCE(MAX(
@@ -63,4 +71,5 @@ CREATE TRIGGER trg_set_ics_number
 
 -- Test the function
 SELECT 'ICS number generation setup complete!' as status;
-SELECT public.generate_ics_number() as sample_ics_number;
+SELECT public.generate_ics_number('SPHV') as sample_high_value_ics_number;
+SELECT public.generate_ics_number('SPLV') as sample_low_value_ics_number;

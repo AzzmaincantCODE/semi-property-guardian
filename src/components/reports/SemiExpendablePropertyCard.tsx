@@ -14,12 +14,22 @@ export const SemiExpendablePropertyCard: React.FC<PropertyCardProps> = ({ data }
   };
 
   const entries = React.useMemo(() => {
-    let running = 0;
+    let runningQty = 0;
+    let runningAmount = 0;
     return (data.entries || []).map((e) => {
       const receipt = Number(e.receiptQty || 0);
       const issue = Number(e.issueQty || 0);
-      running = running + receipt - issue;
-      return { ...e, balanceQty: e.balanceQty || running } as AnnexSPCEntry;
+      const receiptAmount = Number(e.totalCost || e.amount || 0);
+      const issueAmount = 0; // Issue entries don't have amounts typically
+      
+      runningQty = runningQty + receipt - issue;
+      runningAmount = runningAmount + receiptAmount - issueAmount;
+      
+      return { 
+        ...e, 
+        balanceQty: e.balanceQty != null ? e.balanceQty : runningQty,
+        amount: e.amount != null ? e.amount : (e.totalCost != null ? e.totalCost : runningAmount)
+      } as AnnexSPCEntry;
     });
   }, [data.entries]);
 
@@ -85,8 +95,7 @@ export const SemiExpendablePropertyCard: React.FC<PropertyCardProps> = ({ data }
                   <th className="border-r border-black p-1 text-center w-[12%]">Reference</th>
                   <th className="border-r border-black p-1 text-center" colSpan={3}>Receipt</th>
                   <th className="border-r border-black p-1 text-center" colSpan={3}>Issue/Transfer/Disposal</th>
-                  <th className="border-r border-black p-1 text-center w-[6%]">Balance</th>
-                  <th className="border-r border-black p-1 text-center w-[10%]">Amount</th>
+                  <th className="border-r border-black p-1 text-center" colSpan={2}>Balance</th>
                   <th className="p-1 text-center w-[14%]">Remarks</th>
                 </tr>
                 <tr className="border-b border-black">
@@ -99,7 +108,7 @@ export const SemiExpendablePropertyCard: React.FC<PropertyCardProps> = ({ data }
                   <th className="border-r border-black p-1 text-center w-[6%]">Qty.</th>
                   <th className="border-r border-black p-1 text-center w-[14%]">Office/Officer</th>
                   <th className="border-r border-black p-1 text-center w-[6%]">Qty.</th>
-                  <th className="border-r border-black p-1"></th>
+                  <th className="border-r border-black p-1 text-center w-[10%]">Amount</th>
                   <th className="p-1"></th>
                 </tr>
               </thead>
@@ -108,14 +117,14 @@ export const SemiExpendablePropertyCard: React.FC<PropertyCardProps> = ({ data }
                   <tr key={index} className="border-b border-gray-300">
                     <td className="border-r border-black p-2 text-center align-top">{entry.date}</td>
                     <td className="border-r border-black p-2 text-center align-top">{entry.reference}</td>
-                    <td className="border-r border-black p-2 text-center align-top">{entry.receiptQty || ''}</td>
-                    <td className="border-r border-black p-2 text-center align-top">{entry.unitCost ? `₱${entry.unitCost.toFixed(2)}` : ''}</td>
-                    <td className="border-r border-black p-2 text-center align-top">{entry.totalCost ? `₱${entry.totalCost.toFixed(2)}` : ''}</td>
+                    <td className="border-r border-black p-2 text-center align-top">{entry.receiptQty != null ? entry.receiptQty : ''}</td>
+                    <td className="border-r border-black p-2 text-center align-top">{entry.unitCost != null ? `₱${Number(entry.unitCost).toFixed(2)}` : ''}</td>
+                    <td className="border-r border-black p-2 text-center align-top">{entry.totalCost != null ? `₱${Number(entry.totalCost).toFixed(2)}` : ''}</td>
                     <td className="border-r border-black p-2 text-center align-top">{entry.issueItemNo || ''}</td>
-                    <td className="border-r border-black p-2 text-center align-top">{entry.issueQty || ''}</td>
+                    <td className="border-r border-black p-2 text-center align-top">{entry.issueQty != null && entry.issueQty !== 0 ? entry.issueQty : ''}</td>
                     <td className="border-r border-black p-2 align-top">{entry.officeOfficer || ''}</td>
-                    <td className="border-r border-black p-2 text-center align-top">{entry.balanceQty || ''}</td>
-                    <td className="border-r border-black p-2 text-center align-top">{entry.amount ? `₱${entry.amount.toFixed(2)}` : ''}</td>
+                    <td className="border-r border-black p-2 text-center align-top">{entry.balanceQty != null ? entry.balanceQty : ''}</td>
+                    <td className="border-r border-black p-2 text-center align-top">{entry.amount != null ? `₱${Number(entry.amount).toFixed(2)}` : ''}</td>
                     <td className="p-2 align-top">{entry.remarks || ''}</td>
                   </tr>
                 ))}

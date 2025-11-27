@@ -20,6 +20,43 @@ The application has been adapted to work with Supabase PostgreSQL, providing:
 
 ## Setup Instructions
 
+> **Lost project recovery (new Supabase ref)**
+>
+> If your original Supabase project was deleted and a fresh one was created (for example, you now have project ref `jiusoksloniuozxrdiok`), follow the checklist below *before* running the app again:
+>
+> 1. **Update env vars** – set `.env.local` to the new `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`, stop `npm run dev`, and restart it so Vite reloads the values.
+> 2. **Run the base schema** – in Supabase SQL Editor execute `database/supabase-schema.sql`. This creates the core tables that the UI expects.
+> 3. **Apply incremental migrations** (in order):
+>    - `database/add-subcategory-to-inventory.sql`
+>    - `database/add-semi-expandable-category-to-inventory.sql`
+>    - `database/add-entity-name-to-inventory.sql`
+>    - `database/add-entity-name-fund-cluster-to-transfers.sql`
+>    - `database/add-transfer-items-fields.sql`
+>    - `database/add-inventory-item-id-to-transfer-items.sql`
+>    - `database/add-missing-ics-fields.sql`
+>    - `database/add-unique-property-number-constraint.sql`
+>    - `database/update-transfer-status-to-draft-issued.sql`
+>    - `database/setup-ics-generation.sql`
+>    - `database/custodians-setup.sql`
+>    - `database/inventory-custodian-setup.sql`
+>    - `database/custodian-slips-setup-fixed.sql`
+> 4. **Create helper functions/views** – run:
+>    - `database/check-and-create-functions.sql`
+>    - `database/create-available-items-with-property-cards-view.sql`
+>    - `database/item-availability-logic.sql`
+> 5. **Seed lookups (optional but recommended)** – execute `database/seed-semi-expandable-categories.sql` plus any org-specific seed scripts you rely on.
+> 6. **Enable RLS again** – for every public table flagged by Studio run `ALTER TABLE public.<table_name> ENABLE ROW LEVEL SECURITY;` and re-create the policies you previously had (see “Security Best Practices” below). Minimal set:
+>    ```sql
+>    ALTER TABLE public.inventory_items ENABLE ROW LEVEL SECURITY;
+>    ALTER TABLE public.property_transfers ENABLE ROW LEVEL SECURITY;
+>    ALTER TABLE public.transfer_items ENABLE ROW LEVEL SECURITY;
+>    ALTER TABLE public.property_transactions ENABLE ROW LEVEL SECURITY;
+>    ```
+>    Afterwards, add policies matching your roles (admins full access, managers read/write, users read-only, etc.).
+> 7. **Clean slate (optional)** – if you need an empty DB after restoring, run `database/safe-delete-transfers-inventory-property-cards.sql`.
+>
+> When all scripts finish without “relation does not exist” errors, reload the browser—the Inventory, Transfers, and Property Cards pages will stop failing because the required tables now exist inside `jiusoksloniuozxrdiok`.
+
 ### 1. Create Supabase Project
 
 1. Go to [supabase.com](https://supabase.com) and sign in

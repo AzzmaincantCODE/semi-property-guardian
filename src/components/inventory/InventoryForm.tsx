@@ -420,7 +420,7 @@ export const InventoryForm = ({ item, onSave, onCancel, isSaving = false }: Inve
             <div className="flex items-center gap-2 mb-2">
               <div className="w-8 h-8 rounded-full bg-green-600 text-white flex items-center justify-center text-sm font-bold">2</div>
               <h3 className="text-lg font-semibold text-green-900">Item Identification</h3>
-            </div>
+          </div>
 
           {/* Brand, Model, Serial Number */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -493,7 +493,7 @@ export const InventoryForm = ({ item, onSave, onCancel, isSaving = false }: Inve
             <div className="flex items-center gap-2 mb-2">
               <div className="w-8 h-8 rounded-full bg-yellow-600 text-white flex items-center justify-center text-sm font-bold">3</div>
               <h3 className="text-lg font-semibold text-yellow-900">Financial Information</h3>
-            </div>
+          </div>
 
           {/* Quantity, Unit of Measure, Unit Cost, Total Cost */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -675,7 +675,7 @@ export const InventoryForm = ({ item, onSave, onCancel, isSaving = false }: Inve
             <div className="flex items-center gap-2 mb-2">
               <div className="w-8 h-8 rounded-full bg-orange-600 text-white flex items-center justify-center text-sm font-bold">5</div>
               <h3 className="text-lg font-semibold text-orange-900">Acquisition Details</h3>
-            </div>
+          </div>
 
           {/* Date Acquired and Supplier */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -736,7 +736,7 @@ export const InventoryForm = ({ item, onSave, onCancel, isSaving = false }: Inve
             <div className="flex items-center gap-2 mb-2">
               <div className="w-8 h-8 rounded-full bg-red-600 text-white flex items-center justify-center text-sm font-bold">6</div>
               <h3 className="text-lg font-semibold text-red-900">Status and Condition</h3>
-            </div>
+          </div>
 
           {/* Condition and Status */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -775,8 +775,8 @@ export const InventoryForm = ({ item, onSave, onCancel, isSaving = false }: Inve
           </div>
 
             {/* Last Inventory Date */}
-            <div className="space-y-2">
-              <Label htmlFor="lastInventoryDate">Last Inventory Date</Label>
+          <div className="space-y-2">
+            <Label htmlFor="lastInventoryDate">Last Inventory Date</Label>
             <Input
               id="lastInventoryDate"
               type="date"
@@ -791,7 +791,7 @@ export const InventoryForm = ({ item, onSave, onCancel, isSaving = false }: Inve
             <div className="flex items-center gap-2 mb-2">
               <div className="w-8 h-8 rounded-full bg-gray-600 text-white flex items-center justify-center text-sm font-bold">7</div>
               <h3 className="text-lg font-semibold text-gray-900">Additional Information</h3>
-            </div>
+          </div>
 
           {/* Remarks */}
           <div className="space-y-2">

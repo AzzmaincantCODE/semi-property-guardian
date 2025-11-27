@@ -12,6 +12,7 @@ import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
+import { GlobalRealtimeSyncProvider } from "@/providers/GlobalRealtimeSyncProvider";
 import { Dashboard } from "@/pages/Dashboard";
 import { Inventory } from "@/pages/Inventory";
 import { PropertyCards } from "@/pages/PropertyCards";
@@ -64,6 +65,7 @@ const App = () => {
   return (
     <ThemeProvider defaultTheme="system" storageKey="semi-property-theme">
       <QueryClientProvider client={queryClient}>
+        <GlobalRealtimeSyncProvider>
         <TooltipProvider>
           <Toaster /><Sonner />
           <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -101,6 +103,7 @@ const App = () => {
             </div>
           </HashRouter>
         </TooltipProvider>
+        </GlobalRealtimeSyncProvider>
       </QueryClientProvider>
     </ThemeProvider>
   );

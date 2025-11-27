@@ -408,10 +408,61 @@ export const propertyCardService = {
   // Safe delete property card
   async safeDelete(id: string): Promise<SupabaseResponse<boolean>> {
     try {
+      // First try to use the database function
       const { data, error } = await supabase
         .rpc('safe_delete_property_card', { card_id: id });
 
       if (error) {
+        // If function doesn't exist, fall back to manual deletion
+        if (error.code === 'PGRST202' || error.message.includes('Could not find the function')) {
+          console.warn('safe_delete_property_card function not found, using fallback deletion');
+          
+          // Check if we can delete first
+          const canDeleteResult = await this.canDelete(id);
+          if (!canDeleteResult.success || !canDeleteResult.data) {
+            return {
+              data: null,
+              error: 'Cannot delete property card - it has custodian slip or transfer references',
+              success: false,
+            };
+          }
+          
+          // Manually delete: first remove references, then delete entries, then delete card
+          // Remove property_card_entry_id references in custodian_slip_items
+          const { data: entries } = await supabase
+            .from('property_card_entries')
+            .select('id')
+            .eq('property_card_id', id);
+          
+          if (entries && entries.length > 0) {
+            const entryIds = entries.map(e => e.id);
+            await supabase
+              .from('custodian_slip_items')
+              .update({ property_card_entry_id: null })
+              .in('property_card_entry_id', entryIds);
+          }
+          
+          // Delete the property card (entries will cascade if ON DELETE CASCADE is set)
+          const { error: deleteError } = await supabase
+            .from('property_cards')
+            .delete()
+            .eq('id', id);
+          
+          if (deleteError) {
+            return {
+              data: null,
+              error: deleteError.message,
+              success: false,
+            };
+          }
+          
+          return {
+            data: true,
+            error: null,
+            success: true,
+          };
+        }
+        
         console.error('Safe delete property card error:', error);
         return {
           data: null,
@@ -438,10 +489,42 @@ export const propertyCardService = {
   // Check if property card can be deleted
   async canDelete(id: string): Promise<SupabaseResponse<boolean>> {
     try {
+      // First try to use the database function
       const { data, error } = await supabase
         .rpc('can_delete_property_card', { card_id: id });
 
       if (error) {
+        // If function doesn't exist, fall back to manual check
+        if (error.code === 'PGRST202' || error.message.includes('Could not find the function')) {
+          console.warn('can_delete_property_card function not found, using fallback check');
+          
+          // Manual check: see if there are any custodian slip items referencing this card's entries
+          const { data: entries } = await supabase
+            .from('property_card_entries')
+            .select('id')
+            .eq('property_card_id', id)
+            .limit(1);
+          
+          if (!entries || entries.length === 0) {
+            // No entries, safe to delete
+            return { data: true, error: null, success: true };
+          }
+          
+          const entryIds = entries.map(e => e.id);
+          const { data: slipItems } = await supabase
+            .from('custodian_slip_items')
+            .select('id')
+            .in('property_card_entry_id', entryIds)
+            .limit(1);
+          
+          // Can delete if no slip items reference the entries
+          return {
+            data: !slipItems || slipItems.length === 0,
+            error: null,
+            success: true,
+          };
+        }
+        
         console.error('Can delete property card error:', error);
         return {
           data: null,
