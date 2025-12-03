@@ -198,11 +198,19 @@ export const InventoryForm = ({ item, onSave, onCancel, isSaving = false }: Inve
       return { isValid: true, message: '' };
     }
     
-    // Check minimum value only if user has entered something
+    // Check minimum value
     if (unitCost < 0.01) {
       return {
         isValid: false,
         message: 'Unit cost must be at least ₱0.01'
+      };
+    }
+
+    // Check maximum value for semi-expendable items
+    if (unitCost > 50000) {
+      return {
+        isValid: false,
+        message: 'Unit cost must not exceed ₱50,000 for Semi-Expendable items'
       };
     }
     
@@ -533,6 +541,7 @@ export const InventoryForm = ({ item, onSave, onCancel, isSaving = false }: Inve
                 type="number"
                 step="0.01"
                 min="0.01"
+                max="50000"
                 value={formData.unitCost || ''}
                 onChange={(e) => {
                   const value = parseFloat(e.target.value);
@@ -540,18 +549,23 @@ export const InventoryForm = ({ item, onSave, onCancel, isSaving = false }: Inve
                   if (isNaN(value)) {
                     setFormData({...formData, unitCost: undefined});
                   } else {
-                    setFormData({...formData, unitCost: value});
+                    setFormData({
+                      ...formData,
+                      unitCost: value > 50000 ? 50000 : value
+                    });
                   }
                 }}
                 onBlur={(e) => {
                   const value = parseFloat(e.target.value);
-                  // Ensure minimum value on blur
+                  // Ensure value is within allowed range on blur
                   if (!value || value <= 0) {
                     setFormData({...formData, unitCost: 0.01});
+                  } else if (value > 50000) {
+                    setFormData({...formData, unitCost: 50000});
                   }
                 }}
                 required
-                placeholder="Enter amount (minimum ₱0.01)"
+                placeholder="Enter amount (₱0.01 – ₱50,000.00)"
                 className={!unitCostValidation.isValid ? "border-red-500" : ""}
               />
               {!unitCostValidation.isValid && (

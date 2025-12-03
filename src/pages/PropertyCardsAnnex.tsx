@@ -15,6 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { supabase } from "@/lib/supabase";
+import { getNewestRecordId, isWithinRecentThreshold } from "@/lib/utils";
 import { annexService } from "@/services/annexService";
 import { simpleInventoryService } from "@/services/simpleInventoryService";
 import { propertyCardService } from "@/services/propertyCardService";
@@ -614,6 +615,10 @@ export const PropertyCardsAnnex = () => {
   const highValueCards = filteredCards.filter(card => (card as any).isHighValue === true);
   const lowValueCards = filteredCards.filter(card => (card as any).isHighValue !== true);
 
+  const newestCardId = useMemo(() => getNewestRecordId(cards), [cards]);
+  const isRecentlyAddedCard = (card: AnnexPropertyCard) =>
+    newestCardId === card.id && isWithinRecentThreshold(card.createdAt);
+
   if (loading && cards.length === 0) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -738,7 +743,16 @@ export const PropertyCardsAnnex = () => {
                       ) : (
                         cardsToRender.map((card) => (
                           <TableRow key={card.id}>
-                            <TableCell className="font-medium font-mono">{card.propertyNumber}</TableCell>
+                            <TableCell className="font-medium font-mono">
+                              <div className="flex items-center gap-2">
+                                <span>{card.propertyNumber}</span>
+                                {isRecentlyAddedCard(card) && (
+                                  <Badge variant="default" className="bg-emerald-600 text-white">
+                                    Recently Added
+                                  </Badge>
+                                )}
+                              </div>
+                            </TableCell>
                             <TableCell className="max-w-xs">
                               <div className="truncate" title={card.description}>
                                 {card.description}

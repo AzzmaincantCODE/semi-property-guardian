@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -18,6 +18,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { simpleInventoryService } from "@/services/simpleInventoryService";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
+import { getNewestRecordId, isWithinRecentThreshold } from "@/lib/utils";
 import { format } from "date-fns";
 import { annexService } from "@/services/annexService";
 import { lookupService } from "@/services/lookupService";
@@ -194,6 +195,21 @@ export const Inventory = () => {
   const loading = valueFilter ? loadingFiltered : false;
   const isFetching = valueFilter ? fetchingFiltered : (fetchingHighValue || fetchingLowValue);
   const error = valueFilter ? filteredError : null;
+
+  const allInventoryItems = useMemo(() => {
+    const source = valueFilter ? items : [...highValueItems, ...lowValueItems];
+    const deduped = new Map<string, InventoryItem>();
+    (source || []).forEach((item) => {
+      if (item && !deduped.has(item.id)) {
+        deduped.set(item.id, item);
+      }
+    });
+    return Array.from(deduped.values());
+  }, [valueFilter, items, highValueItems, lowValueItems]);
+
+  const newestInventoryItemId = useMemo(() => getNewestRecordId(allInventoryItems), [allInventoryItems]);
+  const isRecentlyAddedItem = (item: InventoryItem) =>
+    newestInventoryItemId === item.id && isWithinRecentThreshold(item.createdAt);
 
   // Mutations for CRUD operations
   const createItemMutation = useMutation({
@@ -567,6 +583,18 @@ export const Inventory = () => {
     return { status: 'Available', reason: 'Ready for assignment', color: 'bg-green-100 text-green-800' };
   };
 
+  const hasActiveFilters = Boolean(
+    (filter && filter !== "all") ||
+      (valueFilter && valueFilter !== "all") ||
+      searchTerm.trim()
+  );
+
+  const handleResetView = () => {
+    setSearchTerm("");
+    handleSearch("");
+    navigate("/inventory", { replace: true });
+  };
+
   if (showForm) {
     return (
       <InventoryForm
@@ -641,15 +669,15 @@ export const Inventory = () => {
       
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-4">
-          <Button 
-            variant="outline" 
-            size="sm" 
-            onClick={() => navigate('/inventory')}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleResetView}
             className="flex items-center space-x-2"
             disabled={createItemMutation.isPending || updateItemMutation.isPending || deleteItemMutation.isPending}
           >
             <ArrowLeft className="h-4 w-4" />
-            <span>{filter || valueFilter ? 'Clear Filters' : 'View All Items'}</span>
+            <span>{hasActiveFilters ? 'Clear Filters' : 'View All Items'}</span>
           </Button>
           <h1 className="text-3xl font-bold text-foreground">
             {filter === 'issued' ? 'Issued Items' : 
@@ -712,7 +740,16 @@ export const Inventory = () => {
                 ) : (
                   items.map((item) => (
                   <TableRow key={item.id}>
-                    <TableCell className="font-medium">{item.propertyNumber}</TableCell>
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
+                        <span>{item.propertyNumber}</span>
+                        {isRecentlyAddedItem(item) && (
+                          <Badge variant="default" className="bg-emerald-600 text-white">
+                            Recently Added
+                          </Badge>
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell className="max-w-xs">
                       <div className="truncate" title={item.description}>
                         {item.description}
@@ -1170,9 +1207,9 @@ export const Inventory = () => {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-            <AlertDialogDescription>
+            <AlertDialogDescription asChild>
               {itemToDelete && isItemUnderCustody(itemToDelete) ? (
-                <div className="space-y-2">
+                <div className="space-y-2 text-sm text-muted-foreground">
                   <p className="text-destructive font-semibold">
                     ⚠️ This item cannot be deleted because it is currently under custody.
                   </p>
@@ -1184,12 +1221,14 @@ export const Inventory = () => {
                   </p>
                 </div>
               ) : (
-                <p>
-                  This action cannot be undone. This will permanently delete the inventory item
-                  {itemToDelete && (
-                    <span className="font-semibold"> "{itemToDelete.propertyNumber} - {itemToDelete.description}"</span>
-                  )} from the system.
-                </p>
+                <div className="text-sm text-muted-foreground">
+                  <p>
+                    This action cannot be undone. This will permanently delete the inventory item
+                    {itemToDelete && (
+                      <span className="font-semibold"> "{itemToDelete.propertyNumber} - {itemToDelete.description}"</span>
+                    )} from the system.
+                  </p>
+                </div>
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>

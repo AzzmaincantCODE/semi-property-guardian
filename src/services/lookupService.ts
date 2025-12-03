@@ -240,18 +240,46 @@ export const lookupService = {
       }
     }
     
-    // For custodians, check if they're referenced by inventory items
+    // For custodians, check if they're referenced by inventory items (either by ID or by name)
     if (table === 'custodians') {
-      const { data: inventoryItems, error: checkError } = await supabase
+      // First, get the custodian's name
+      const { data: custodianRow, error: custodianLookupError } = await supabase
+        .from('custodians')
+        .select('name')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (custodianLookupError) throw custodianLookupError;
+
+      const custodianName = custodianRow?.name || null;
+
+      // Check by custodian_id (preferred)
+      const { data: inventoryById, error: byIdError } = await supabase
         .from('inventory_items')
         .select('id')
         .eq('custodian_id', id)
         .limit(1);
-      
-      if (checkError) throw checkError;
-      
-      if (inventoryItems && inventoryItems.length > 0) {
-        throw new Error('Cannot delete custodian: They are assigned to inventory items. Please reassign the items first.');
+
+      if (byIdError) throw byIdError;
+
+      // Check by custodian name (legacy/text column), if we have a name
+      let inventoryByName: any[] | null = null;
+      if (custodianName) {
+        const result = await supabase
+          .from('inventory_items')
+          .select('id')
+          .eq('custodian', custodianName)
+          .limit(1);
+        if (result.error) throw result.error;
+        inventoryByName = result.data;
+      }
+
+      const hasAssignments =
+        (inventoryById && inventoryById.length > 0) ||
+        (inventoryByName && inventoryByName.length > 0);
+
+      if (hasAssignments) {
+        throw new Error('This Custodian still has items in custody. Suggest transferring items before deletion.');
       }
     }
     

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Search, Plus, Loader2, AlertCircle, Printer, Eye, Trash2, CheckCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -27,6 +28,7 @@ import {
   CreateCustodianSlipRequest,
   AnnexInventoryItem 
 } from "@/types/annex";
+import { getNewestRecordId, isWithinRecentThreshold } from "@/lib/utils";
 
 export const CustodianSlipsAnnex = () => {
   const navigate = useNavigate();
@@ -630,11 +632,158 @@ export const CustodianSlipsAnnex = () => {
     );
   };
 
+  const categorizeSlip = (slip: AnnexCustodianSlip): "high" | "low" => {
+    const normalizedNumber = (slip.slipNumber || "").toUpperCase();
+    if (normalizedNumber.includes("SPHV")) return "high";
+    if (normalizedNumber.includes("SPLV")) return "low";
+    const hasHighValueItem = slip.items.some((item) => Number(item.amount ?? item.totalCost ?? 0) > 5000);
+    return hasHighValueItem ? "high" : "low";
+  };
+
   const filteredSlips = slips.filter(slip =>
     slip.slipNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
     slip.custodianName.toLowerCase().includes(searchTerm.toLowerCase()) ||
     slip.office.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const { highValueSlips, lowValueSlips } = useMemo(() => {
+    const groups = {
+      highValueSlips: [] as AnnexCustodianSlip[],
+      lowValueSlips: [] as AnnexCustodianSlip[],
+    };
+    filteredSlips.forEach((slip) => {
+      if (categorizeSlip(slip) === "high") {
+        groups.highValueSlips.push(slip);
+      } else {
+        groups.lowValueSlips.push(slip);
+      }
+    });
+    return groups;
+  }, [filteredSlips]);
+
+  const newestSlipId = useMemo(() => getNewestRecordId(slips), [slips]);
+  const isRecentlyAddedSlip = (slip: AnnexCustodianSlip) =>
+    newestSlipId === slip.id && isWithinRecentThreshold(slip.createdAt);
+
+  const renderSlipGrid = (slipList: AnnexCustodianSlip[]) => {
+    if (loading) {
+      return (
+        <div className="flex items-center justify-center py-10 text-muted-foreground">
+          <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+          Loading custodian slips…
+        </div>
+      );
+    }
+
+    if (slipList.length === 0) {
+      return (
+        <div className="rounded-md border border-dashed py-10 text-center text-muted-foreground">
+          No custodian slips found for this value category.
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {slipList.map((slip) => (
+          <Card key={slip.id} className="hover:shadow-lg transition-shadow">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-lg font-mono">{slip.slipNumber}</CardTitle>
+                  {isRecentlyAddedSlip(slip) && (
+                    <Badge variant="default" className="bg-emerald-600 text-white">
+                      Recently Added
+                    </Badge>
+                  )}
+                </div>
+                <Badge 
+                  variant={slip.slipStatus === 'Issued' ? 'default' : 'secondary'}
+                  className="ml-2"
+                >
+                  {slip.slipStatus || 'Draft'}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground mb-2">Property Numbers:</p>
+                  <div className="flex flex-wrap gap-1">
+                    {slip.items.map((item, idx) => (
+                      <Badge key={item.id || idx} variant="outline" className="font-mono text-xs">
+                        {item.propertyNumber}
+                      </Badge>
+                    ))}
+                  </div>
+                  {slip.items.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No items</p>
+                  )}
+                </div>
+                
+                <div className="flex gap-2 pt-2 border-t">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => handleViewSlip(slip)}
+                    className="flex items-center gap-1 flex-1"
+                  >
+                    <Eye className="h-3 w-3" />
+                    View
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => handlePrintSlip(slip)}
+                    className="flex items-center gap-1 flex-1"
+                  >
+                    <Printer className="h-3 w-3" />
+                    Print
+                  </Button>
+                  
+                  {(slip.slipStatus === 'Draft' || !slip.slipStatus) && (
+                    <Button 
+                      variant="default" 
+                      size="sm" 
+                      onClick={() => handleConfirmSlip(slip.id)}
+                      className="flex items-center gap-1 bg-green-600 hover:bg-green-700 flex-1"
+                      disabled={confirmSlipMutation.isPending}
+                      title="Confirm this slip as official (cannot be deleted after confirmation)"
+                    >
+                      {confirmSlipMutation.isPending ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <CheckCircle className="h-3 w-3" />
+                      )}
+                      Confirm
+                    </Button>
+                  )}
+                  
+                  {(!slip.slipStatus || ['Draft', 'Issued'].includes(slip.slipStatus)) && (
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => handleDeleteSlip(slip.id)}
+                      className="flex items-center gap-1 text-red-600 hover:text-red-700"
+                      disabled={deleteSlipMutation.isPending}
+                      title={slip.slipStatus === 'Issued' 
+                        ? 'Delete this issued custodian slip (temporary override)'
+                        : 'Delete this draft custodian slip'}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      Delete
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
+  };
+
+  const slipTabDefaultValue = highValueSlips.length ? "high-value" : "low-value";
 
   if (loading && slips.length === 0) {
     return (
@@ -700,100 +849,41 @@ export const CustodianSlipsAnnex = () => {
         </div>
       </div>
 
-      {/* Custodian Slips Grid - Simplified: Only ICS Number and Property Numbers */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filteredSlips.map((slip) => (
-          <Card key={slip.id} className="hover:shadow-lg transition-shadow">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-lg font-mono">{slip.slipNumber}</CardTitle>
-                <Badge 
-                  variant={slip.slipStatus === 'Issued' ? 'default' : 'secondary'}
-                  className="ml-2"
-                >
-                  {slip.slipStatus || 'Draft'}
+      <Card>
+        <CardHeader>
+          <CardTitle>Custodian Slips by Value Category</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Tabs key={slipTabDefaultValue} defaultValue={slipTabDefaultValue} className="w-full">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="high-value" className="flex items-center gap-2">
+                <span className="font-semibold">High Value (SPHV)</span>
+                <Badge variant="secondary" className="ml-auto">
+                  {highValueSlips.length}
                 </Badge>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {/* Property Numbers List */}
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground mb-2">Property Numbers:</p>
-                  <div className="flex flex-wrap gap-1">
-                    {slip.items.map((item, idx) => (
-                      <Badge key={item.id || idx} variant="outline" className="font-mono text-xs">
-                        {item.propertyNumber}
-                      </Badge>
-                    ))}
-                  </div>
-                  {slip.items.length === 0 && (
-                    <p className="text-xs text-muted-foreground">No items</p>
-                  )}
-                </div>
-                
-                {/* Action Buttons */}
-                <div className="flex gap-2 pt-2 border-t">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => handleViewSlip(slip)}
-                    className="flex items-center gap-1 flex-1"
-                  >
-                    <Eye className="h-3 w-3" />
-                    View
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => handlePrintSlip(slip)}
-                    className="flex items-center gap-1 flex-1"
-                  >
-                    <Printer className="h-3 w-3" />
-                    Print
-                  </Button>
-                  
-                  {/* Show Confirm button for Draft slips */}
-                  {(slip.slipStatus === 'Draft' || !slip.slipStatus) && (
-                    <Button 
-                      variant="default" 
-                      size="sm" 
-                      onClick={() => handleConfirmSlip(slip.id)}
-                      className="flex items-center gap-1 bg-green-600 hover:bg-green-700 flex-1"
-                      disabled={confirmSlipMutation.isPending}
-                      title="Confirm this slip as official (cannot be deleted after confirmation)"
-                    >
-                      {confirmSlipMutation.isPending ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        <CheckCircle className="h-3 w-3" />
-                      )}
-                      Confirm
-                    </Button>
-                  )}
-                  
-                  {/* Temporarily allow deleting Draft or Issued slips */}
-                  {(!slip.slipStatus || ['Draft', 'Issued'].includes(slip.slipStatus)) && (
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
-                      onClick={() => handleDeleteSlip(slip.id)}
-                      className="flex items-center gap-1 text-red-600 hover:text-red-700"
-                      disabled={deleteSlipMutation.isPending}
-                      title={slip.slipStatus === 'Issued' 
-                        ? 'Delete this issued custodian slip (temporary override)'
-                        : 'Delete this draft custodian slip'}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                      Delete
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+              </TabsTrigger>
+              <TabsTrigger value="low-value" className="flex items-center gap-2">
+                <span className="font-semibold">Low Value (SPLV)</span>
+                <Badge variant="secondary" className="ml-auto">
+                  {lowValueSlips.length}
+                </Badge>
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="high-value" className="mt-4 space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Items above ₱5,000 are issued through SPHV slips.
+              </p>
+              {renderSlipGrid(highValueSlips)}
+            </TabsContent>
+            <TabsContent value="low-value" className="mt-4 space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Items ₱5,000 or less are issued through SPLV slips.
+              </p>
+              {renderSlipGrid(lowValueSlips)}
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+      </Card>
 
       {filteredSlips.length === 0 && !loading && (
         <div className="text-center py-8">

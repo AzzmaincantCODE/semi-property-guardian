@@ -91,8 +91,20 @@ export default function Lookups() {
       cancel();
     };
     const remove = async (id: string) => {
-      await lookupService.remove(table, id);
-      setItems(items.filter(i => i.id !== id));
+      try {
+        await lookupService.remove(table, id);
+        setItems(items.filter(i => i.id !== id));
+        toast({
+          title: "Deleted",
+          description: "Record has been removed from lookups.",
+        });
+      } catch (error: any) {
+        toast({
+          title: "Unable to delete",
+          description: error?.message || "Failed to delete this record.",
+          variant: "destructive",
+        });
+      }
     };
     return { mode, editing, form, setForm, startCreate, startEdit, save, remove, cancel, hasCode, codeRequired };
   };

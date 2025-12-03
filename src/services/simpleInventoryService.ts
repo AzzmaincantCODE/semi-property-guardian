@@ -512,10 +512,9 @@ export const simpleInventoryService = {
       return { data: null, error: null, success: true };
     }
     
-    // First, check if the item is under custody
     const { data: item, error: fetchError } = await supabase
       .from('inventory_items')
-      .select('id, assignment_status, custodian')
+      .select('id, property_number, assignment_status, custodian')
       .eq('id', id)
       .single();
 
@@ -527,7 +526,6 @@ export const simpleInventoryService = {
       };
     }
 
-    // Check if item is under custody
     const isUnderCustody = item.assignment_status === 'Assigned' || 
                            (item.custodian && item.custodian.trim() !== '');
     
@@ -538,43 +536,164 @@ export const simpleInventoryService = {
         success: false,
       };
     }
-    
-    // Use the safe deletion function to handle foreign key constraints
-    const { data, error } = await supabase
-      .rpc('safe_delete_inventory_item', { item_id: id });
 
-    if (error) {
-      
-      // Check if function doesn't exist (400 Bad Request)
-      if (error.message.includes('function') && error.message.includes('does not exist')) {
-        return {
-          data: null,
-          error: 'Safe deletion function not found. Please run the database setup script first.',
-          success: false,
-        };
-      }
-      
-      // Check if it's a foreign key constraint error
-      if (error.message.includes('Cannot delete inventory item')) {
-        return {
-          data: null,
-          error: 'This inventory item cannot be deleted because it is assigned to custodian slips or has property card entries.',
-          success: false,
-        };
-      }
-      
-      return {
-        data: null,
-        error: error.message,
-        success: false,
-      };
-    }
+    const propertyNumber: string | undefined = item.property_number;
 
-    return {
-      data: data,
-      error: null,
-      success: true,
+    const cleanupOrphanRecords = async () => {
+      try {
+        // First, find all transfer_ids that will be affected
+        const transferIdsToCheck = new Set<string>();
+        
+        const { data: transferItemsByInventory } = await supabase
+          .from('transfer_items')
+          .select('transfer_id')
+          .eq('inventory_item_id', id);
+        
+        transferItemsByInventory?.forEach((item: any) => {
+          if (item.transfer_id) transferIdsToCheck.add(item.transfer_id);
+        });
+
+        if (propertyNumber) {
+          const { data: transferItemsByProperty } = await supabase
+            .from('transfer_items')
+            .select('transfer_id')
+            .eq('property_number', propertyNumber);
+          
+          transferItemsByProperty?.forEach((item: any) => {
+            if (item.transfer_id) transferIdsToCheck.add(item.transfer_id);
+          });
+        }
+
+        // Delete transfer items
+        const cleanupTasks: Promise<any>[] = [
+          supabase.from('custodian_slip_items').delete().eq('inventory_item_id', id),
+          supabase.from('property_card_entries').delete().eq('inventory_item_id', id),
+          supabase.from('transfer_items').delete().eq('inventory_item_id', id),
+        ];
+
+        if (propertyNumber) {
+          cleanupTasks.push(
+            supabase.from('custodian_slip_items').delete().eq('property_number', propertyNumber),
+            supabase.from('property_card_entries').delete().eq('issue_item_no', propertyNumber),
+            supabase.from('transfer_items').delete().eq('property_number', propertyNumber)
+          );
+        }
+
+        await Promise.allSettled(cleanupTasks);
+
+        // Check which transfers are now empty and delete them
+        const transferIdsArray = Array.from(transferIdsToCheck);
+        if (transferIdsArray.length > 0) {
+          // Find transfers that have no remaining items
+          const { data: remainingTransferItems } = await supabase
+            .from('transfer_items')
+            .select('transfer_id')
+            .in('transfer_id', transferIdsArray);
+          
+          const transfersWithItems = new Set<string>();
+          remainingTransferItems?.forEach((item: any) => {
+            if (item.transfer_id) transfersWithItems.add(item.transfer_id);
+          });
+          
+          // Delete transfers that have no items left
+          const emptyTransferIds = transferIdsArray.filter(tid => !transfersWithItems.has(tid));
+          if (emptyTransferIds.length > 0) {
+            // Delete property card entries that reference these transfers
+            await supabase
+              .from('property_card_entries')
+              .delete()
+              .in('related_transfer_id', emptyTransferIds);
+            
+            // Delete the empty transfers
+            await supabase
+              .from('property_transfers')
+              .delete()
+              .in('id', emptyTransferIds);
+          }
+        }
+
+        // Clean up property cards
+        const propertyCardIds = new Set<string>();
+
+        const { data: cardsByInventory } = await supabase
+          .from('property_cards')
+          .select('id')
+          .eq('inventory_item_id', id);
+
+        cardsByInventory?.forEach((card: any) => propertyCardIds.add(card.id));
+
+        if (propertyNumber) {
+          const { data: cardsByNumber } = await supabase
+            .from('property_cards')
+            .select('id')
+            .eq('property_number', propertyNumber);
+          cardsByNumber?.forEach((card: any) => propertyCardIds.add(card.id));
+        }
+
+        const cardIds = Array.from(propertyCardIds);
+        if (cardIds.length > 0) {
+          await supabase.from('property_card_entries').delete().in('property_card_id', cardIds);
+          await supabase.from('property_cards').delete().in('id', cardIds);
+        }
+      } catch (cleanupError) {
+        console.warn('[Inventory] Cleanup before deletion encountered issues:', cleanupError);
+      }
     };
+
+    const deleteInventoryRow = async () => {
+      const { data: deletedRows, error: directDeleteError } = await supabase
+        .from('inventory_items')
+        .delete()
+        .eq('id', id)
+        .select('id');
+
+      if (directDeleteError) throw directDeleteError;
+      if (!deletedRows || deletedRows.length === 0) {
+        throw new Error('Inventory item could not be removed. Please refresh and try again.');
+      }
+    };
+
+    const attemptSafeDelete = async () => {
+      const { error } = await supabase.rpc('safe_delete_inventory_item', { item_id: id });
+      if (error) throw error;
+    };
+
+    try {
+      await attemptSafeDelete();
+      return { data: null, error: null, success: true };
+    } catch (safeError: any) {
+      const message = safeError?.message || String(safeError);
+      const functionMissing = message.includes('does not exist');
+      const hasReferences =
+        message.includes('Cannot delete inventory item') ||
+        safeError?.code === 'P0001' ||
+        safeError?.code === '23503' ||
+        safeError?.code === 'PGRST116';
+
+      if (!functionMissing && !hasReferences) {
+        return { data: null, error: message, success: false };
+      }
+
+      await cleanupOrphanRecords();
+
+      try {
+        await attemptSafeDelete();
+        return { data: null, error: null, success: true };
+      } catch (safeErrorAfterCleanup) {
+        console.warn('[Inventory] safe_delete_inventory_item still failing after cleanup, attempting direct delete:', safeErrorAfterCleanup);
+        try {
+          await deleteInventoryRow();
+          return { data: null, error: null, success: true };
+        } catch (finalError: any) {
+          console.error('[Inventory] Force delete failed:', finalError);
+          return {
+            data: null,
+            error: finalError?.message || 'Failed to delete inventory item after cleaning related records.',
+            success: false,
+          };
+        }
+      }
+    }
   },
 
   // Search inventory items

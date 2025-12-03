@@ -58,8 +58,11 @@ export default function Custodians() {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'custodians' }, () => {
         console.log('[Realtime] Custodians changed, refreshing...');
+        // Main custodians table on this page
         queryClient.invalidateQueries({ queryKey: ['custodians'] });
         queryClient.invalidateQueries({ queryKey: ['custodian-summaries'] });
+        // Also refresh any custodian search dropdowns across the app
+        queryClient.invalidateQueries({ queryKey: ['custodians-search'] });
       })
       .subscribe();
 

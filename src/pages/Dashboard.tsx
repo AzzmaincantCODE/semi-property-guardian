@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Package, AlertTriangle, ArrowRightLeft, FileText, TrendingUp, Users, Plus, Loader2 } from "lucide-react";
+import { Package, FileText, TrendingUp, Users, Plus, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -123,25 +123,6 @@ export const Dashboard = () => {
       supabase.removeChannel(channel);
     };
   }, [queryClient]);
-
-  const handleQuickAction = (actionTitle: string) => {
-    switch (actionTitle) {
-      case "Add New Item":
-        navigate("/inventory");
-        break;
-      case "Generate Report":
-        navigate("/reports");
-        break;
-      case "Process Transfer":
-        navigate("/transfers");
-        break;
-      case "Physical Count":
-        navigate("/physical-count");
-        break;
-      default:
-        break;
-    }
-  };
 
   const getConditionColor = (condition: string) => {
     switch (condition) {
@@ -405,35 +386,6 @@ export const Dashboard = () => {
           </CardContent>
         </Card>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Quick Actions</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {[
-              { title: "Add New Item", icon: Package, description: "Register new property" },
-              { title: "Generate Report", icon: FileText, description: "Create inventory reports" },
-              { title: "Process Transfer", icon: ArrowRightLeft, description: "Handle property transfers" },
-              { title: "Physical Count", icon: Users, description: "Conduct inventory count" },
-            ].map((action, index) => {
-              const Icon = action.icon;
-              return (
-                <div
-                  key={index}
-                  onClick={() => handleQuickAction(action.title)}
-                  className="p-4 border border-border rounded-lg hover:bg-muted cursor-pointer transition-colors"
-                >
-                  <Icon className="h-6 w-6 text-primary mb-2" />
-                  <h3 className="font-medium text-sm">{action.title}</h3>
-                  <p className="text-xs text-muted-foreground">{action.description}</p>
-                </div>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
 
     </div>
   );

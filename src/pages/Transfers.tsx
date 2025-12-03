@@ -16,6 +16,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { CustodianSelector } from "@/components/ui/custodian-selector";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
+import { getNewestRecordId, isWithinRecentThreshold } from "@/lib/utils";
 import type { Custodian } from "@/services/custodianService";
 import { Printer, Search, Plus, CheckCircle, Clock, AlertCircle, Loader2, Download, History } from "lucide-react";
 
@@ -68,6 +69,7 @@ interface Transfer {
   approvedBy?: string;
   issuedBy?: string;
   receivedBy?: string;
+  createdAt?: string;
 }
 
 interface TransferFormState {
@@ -913,6 +915,7 @@ export const Transfers = () => {
             approvedBy: record.approved_by || "",
             issuedBy: record.requested_by || "",
             receivedBy: record.to_department || "",
+            createdAt: record.created_at,
           };
         }));
 
@@ -1141,6 +1144,10 @@ export const Transfers = () => {
       return matchesSearch && matchesStatus && matchesType && matchesFromDate && matchesToDate;
     });
   }, [transfers, searchTerm, statusFilter, transferTypeFilter, fromDateFilter, toDateFilter]);
+
+  const newestTransferId = useMemo(() => getNewestRecordId(transfers), [transfers]);
+  const isRecentlyAddedTransfer = (transfer: Transfer) =>
+    newestTransferId === transfer.id && isWithinRecentThreshold(transfer.createdAt);
 
   useEffect(() => {
     if (isCreating) {
@@ -1520,6 +1527,7 @@ export const Transfers = () => {
             details: `Created ITR ${itrNumber}`,
           },
         ],
+        createdAt: new Date().toISOString(),
       };
       setTransfers((prev) => [newTransfer, ...prev]);
 
@@ -1569,22 +1577,26 @@ export const Transfers = () => {
       if (newStatus === "Completed" && transfer.items && transfer.items.length > 0) {
         console.log(`🔄 Completing transfer ${transfer.itrNumber}: Creating new ICS for receiving custodian ${transfer.toAccountableOfficer}`);
         
-        // Get the "to" custodian's position/designation
+        // Get the "to" custodian's position/designation (and id for inventory linkage)
         let toCustodianPosition = transfer.toAccountableOfficerDesignation || "";
+        let toCustodianId: string | null = transfer.toAccountableOfficerId || null;
         if (!toCustodianPosition && transfer.toAccountableOfficer) {
           // Try to find custodian by ID first, then by name
           const { data: custodianData } = transfer.toAccountableOfficerId
             ? await supabase
                 .from("custodians")
-                .select("position")
+                .select("id, position")
                 .eq("id", transfer.toAccountableOfficerId)
                 .single()
             : await supabase
                 .from("custodians")
-                .select("position")
+                .select("id, position")
                 .eq("name", transfer.toAccountableOfficer)
                 .single();
-          toCustodianPosition = custodianData?.position || "";
+          if (custodianData) {
+            toCustodianPosition = custodianData.position || "";
+            toCustodianId = custodianData.id || toCustodianId;
+          }
         }
 
         // Group items by sub-category for proper ICS creation (same logic as annexService)
@@ -1673,15 +1685,16 @@ export const Transfers = () => {
               resolvedSlipNumber = fallbackNumber || `TRANSFER-${Date.now()}`;
             }
 
-            // Create the new custodian slip for the receiving custodian
+          // Create the new custodian slip for the receiving custodian
             const newSlipData = {
               slip_number: resolvedSlipNumber,
               custodian_name: transfer.toAccountableOfficer,
               designation: toCustodianPosition || 'Staff',
               office: transfer.toAccountableOfficerDepartment || 'Administration',
               date_issued: dateCompleted || new Date().toISOString().split("T")[0],
-              issued_by: 'System Transfer',
-              received_by: transfer.toAccountableOfficer,
+            // For Annex format: "Received from" = previous custodian, "Received by" = new custodian
+            issued_by: transfer.fromAccountableOfficer || '',
+            received_by: transfer.toAccountableOfficer,
               slip_status: 'Issued' // Automatically issued since transfer is completed
             };
 
@@ -1759,12 +1772,18 @@ export const Transfers = () => {
 
               rollbackState.slipItemIds.push(slipItem.id);
 
-              // Ensure ICS metadata is reflected on the inventory item
+              // Ensure ICS metadata and custodian assignment are reflected on the inventory item
               const { error: invErr } = await supabase
                 .from("inventory_items")
                 .update({
                   ics_number: resolvedSlipNumber,
                   ics_date: dateCompleted || new Date().toISOString().split("T")[0],
+                  // Re-assign to receiving custodian after temporary release
+                  custodian: transfer.toAccountableOfficer,
+                  custodian_position: toCustodianPosition || null,
+                  custodian_id: toCustodianId,
+                  assignment_status: "Assigned",
+                  assigned_date: dateCompleted || new Date().toISOString().split("T")[0],
                   updated_at: new Date().toISOString(),
                 })
                 .eq("id", inventoryItem.id);
@@ -1991,22 +2010,103 @@ export const Transfers = () => {
     setIsProcessing(true);
     // Get transfer to check status
     const transfer = transfers.find((t) => t.id === transferId);
-    if (transfer?.status === "Issued") {
-      toast({
-        title: "Cannot delete",
-        description: "Issued transfers cannot be deleted. Only Draft transfers can be deleted.",
-        variant: "destructive",
-      });
-      setIsProcessing(false);
-      return;
-    }
-
-    if (!window.confirm("Are you sure you want to delete this transfer? This action cannot be undone.")) {
+    
+    // Warn user about deleting completed/issued transfers
+    if (transfer?.status === "Completed" || transfer?.status === "Issued") {
+      const confirmed = window.confirm(
+        `Warning: This transfer is marked as "${transfer.status}". Deleting it will remove all associated records including property card entries. Are you absolutely sure you want to proceed?`
+      );
+      if (!confirmed) {
+        setIsProcessing(false);
+        return;
+      }
+    } else if (!window.confirm("Are you sure you want to delete this transfer? This action cannot be undone.")) {
       setIsProcessing(false);
       return;
     }
 
     try {
+      // If this is a Draft transfer, first revert inventory assignments back to the original custodians
+      if (transfer?.status === "Draft") {
+        const { data: transferItems, error: transferItemsError } = await supabase
+          .from("transfer_items")
+          .select("inventory_item_id, from_custodian, to_custodian")
+          .eq("transfer_id", transferId);
+
+        if (transferItemsError) {
+          throw transferItemsError;
+        }
+
+        const items = (transferItems || []).filter((ti: any) => ti.inventory_item_id);
+
+        if (items.length > 0) {
+          // Build a map of from_custodian name -> custodian metadata (id, position)
+          const fromNames = Array.from(
+            new Set(
+              items
+                .map((ti: any) => ti.from_custodian)
+                .filter((name: string | null | undefined): name is string => Boolean(name))
+            )
+          );
+
+          const custodianMeta = new Map<string, { id?: string | null; position?: string | null }>();
+          if (fromNames.length > 0) {
+            const { data: custodianRows, error: custodianError } = await supabase
+              .from("custodians")
+              .select("id, name, position")
+              .in("name", fromNames);
+
+            if (!custodianError && custodianRows) {
+              (custodianRows as any[]).forEach((row: any) => {
+                if (!row?.name) return;
+                custodianMeta.set(row.name, {
+                  id: row.id,
+                  position: row.position,
+                });
+              });
+            }
+          }
+
+          // Revert each inventory item back to its original custodian
+          for (const ti of items as any[]) {
+            const meta = custodianMeta.get(ti.from_custodian) || {};
+            const updatePayload: Record<string, any> = {
+              custodian: ti.from_custodian || null,
+              assignment_status: "Assigned",
+              updated_at: new Date().toISOString(),
+            };
+
+            if (meta.position) {
+              updatePayload.custodian_position = meta.position;
+            }
+
+            if (meta.id) {
+              updatePayload.custodian_id = meta.id;
+            }
+
+            const { error: revertError } = await supabase
+              .from("inventory_items")
+              .update(updatePayload)
+              .eq("id", ti.inventory_item_id);
+
+            if (revertError) {
+              console.warn("Failed to revert inventory item to original custodian", ti.inventory_item_id, revertError);
+            }
+          }
+        }
+      }
+
+      // Delete property card entries that reference this transfer
+      const { error: entriesError } = await supabase
+        .from("property_card_entries")
+        .delete()
+        .eq("related_transfer_id", transferId);
+
+      if (entriesError) {
+        console.warn("Error deleting property card entries (may not exist):", entriesError);
+        // Continue even if this fails - entries may not exist
+      }
+
       // Delete transfer items first (due to foreign key)
       const { error: itemsError } = await supabase
         .from("transfer_items")
@@ -2023,12 +2123,18 @@ export const Transfers = () => {
 
       if (transferError) throw transferError;
 
-      // Remove from local state
-      setTransfers((prev) => prev.filter((t) => t.id !== transferId));
+      // Invalidate queries to refresh the list and custodian views
+      queryClient.invalidateQueries({ queryKey: ["transfers"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
+      queryClient.invalidateQueries({ queryKey: ["custodian-summaries"] });
+      queryClient.invalidateQueries({ queryKey: ["custodian-current-items"] });
 
       toast({
         title: "Transfer deleted",
-        description: "The transfer has been permanently removed.",
+        description:
+          transfer?.status === "Draft"
+            ? "Draft transfer deleted. Items have been returned to their previous custodians."
+            : "The transfer has been permanently removed.",
       });
       setIsProcessing(false);
     } catch (err) {
@@ -2598,10 +2704,17 @@ export const Transfers = () => {
             <Card key={transfer.id} className="flex flex-col">
             <CardHeader>
                 <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <CardTitle className="text-lg">{transfer.itrNumber}</CardTitle>
-                    <p className="text-sm text-muted-foreground">{formatDate(transfer.date)}</p>
-                  </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-lg">{transfer.itrNumber}</CardTitle>
+                  {isRecentlyAddedTransfer(transfer) && (
+                    <Badge variant="default" className="bg-emerald-600 text-white">
+                      Recently Added
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-sm text-muted-foreground">{formatDate(transfer.date)}</p>
+              </div>
                   <Badge variant={transfer.status === "Draft" ? "secondary" : transfer.status === "Issued" ? "default" : transfer.status === "Completed" ? "default" : transfer.status === "Rejected" ? "destructive" : "secondary"} className="flex items-center gap-1">
                     {transfer.status === "Draft" ? <Clock className="h-3.5 w-3.5" /> : transfer.status === "Issued" ? <CheckCircle className="h-3.5 w-3.5" /> : transfer.status === "Completed" ? <CheckCircle className="h-3.5 w-3.5" /> : transfer.status === "Rejected" ? <AlertCircle className="h-3.5 w-3.5" /> : <Clock className="h-3.5 w-3.5" />}
                   {transfer.status}
@@ -2706,7 +2819,7 @@ export const Transfers = () => {
                     Print Inventory Transfer Report
                   </Button>
 
-                  {transfer.status === "Rejected" && (
+                  {(transfer.status === "Rejected" || transfer.status === "Completed") && (
                 <Button
                       type="button"
                   size="sm"
@@ -2714,7 +2827,7 @@ export const Transfers = () => {
                       className="w-full"
                       onClick={() => handleDeleteTransfer(transfer.id)}
                 >
-                      Delete Rejected Transfer
+                      {transfer.status === "Rejected" ? "Delete Rejected Transfer" : "Delete Completed Transfer"}
                 </Button>
                   )}
 
@@ -2820,21 +2933,19 @@ export const Transfers = () => {
               onChange={(event) => setItemSearchTerm(event.target.value)}
             />
             <div className="border rounded-md h-[360px] overflow-hidden">
-              <Table className="table-fixed">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[48px]" />
-                    <TableHead className="w-[160px]">Item No.</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead className="w-[200px]">ICS No.</TableHead>
-                    <TableHead className="w-[140px]">Date Issued</TableHead>
-                    <TableHead className="w-[140px] text-right">Amount</TableHead>
-                    <TableHead className="w-[160px]">Condition</TableHead>
-                  </TableRow>
-                </TableHeader>
-              </Table>
-              <ScrollArea className="h-[300px]">
+              <ScrollArea className="h-[360px]">
                 <Table className="table-fixed">
+                  <TableHeader className="sticky top-0 z-10 bg-background shadow-sm">
+                    <TableRow>
+                      <TableHead className="w-[48px]" />
+                      <TableHead className="w-[160px]">Item No.</TableHead>
+                      <TableHead>Description</TableHead>
+                      <TableHead className="w-[200px]">ICS No.</TableHead>
+                      <TableHead className="w-[140px]">Date Issued</TableHead>
+                      <TableHead className="w-[140px] text-right">Amount</TableHead>
+                      <TableHead className="w-[160px]">Condition</TableHead>
+                    </TableRow>
+                  </TableHeader>
                   <TableBody>
                     {isLoadingIcs ? (
                       <TableRow>
@@ -2842,7 +2953,7 @@ export const Transfers = () => {
                           <div className="flex items-center justify-center gap-2 py-10 text-muted-foreground">
                             <Loader2 className="h-4 w-4 animate-spin" />
                             Loading ICS items…
-            </div>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ) : availableIcsItems.length === 0 ? (
@@ -2870,7 +2981,9 @@ export const Transfers = () => {
                             <TableCell className="truncate">{item.description || "—"}</TableCell>
                             <TableCell className="w-[200px] truncate">{item.icsSlipNumber || "—"}</TableCell>
                             <TableCell className="w-[140px]">{formatDate(item.icsDate)}</TableCell>
-                            <TableCell className="w-[140px] text-right">{item.amount !== undefined ? formatCurrency(item.amount) : "—"}</TableCell>
+                            <TableCell className="w-[140px] text-right">
+                              {item.amount !== undefined ? formatCurrency(item.amount) : "—"}
+                            </TableCell>
                             <TableCell className="w-[160px]">{item.condition || "—"}</TableCell>
                           </TableRow>
                         );
@@ -2879,8 +2992,8 @@ export const Transfers = () => {
                   </TableBody>
                 </Table>
               </ScrollArea>
-                </div>
-              </div>
+            </div>
+          </div>
           <DialogFooter className="flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
             <p className="text-sm text-muted-foreground">
               {selectedItemIds.length

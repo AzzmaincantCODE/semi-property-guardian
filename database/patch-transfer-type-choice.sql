@@ -15,5 +15,3 @@ SET transfer_type_choice = CASE
   ELSE transfer_type
 END
 WHERE transfer_type_choice IS NULL;
-
-eeeeeeeeeeee

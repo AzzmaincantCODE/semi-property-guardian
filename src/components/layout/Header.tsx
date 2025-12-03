@@ -61,10 +61,10 @@ export const Header = () => {
             </DropdownMenu>
 
             {/* Logout Button */}
-            <Button 
-              variant="outline" 
-              size="sm" 
-              className="text-white border-white/20 hover:bg-white/10"
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-transparent text-white border-white/30 hover:bg-white/10 hover:text-white"
               onClick={handleLogout}
             >
               <LogOut className="h-4 w-4 mr-2" />
